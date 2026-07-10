@@ -62,6 +62,8 @@ Control plane (server ⇄ agent):
 | `task_accept` | s→a | verdict after verification: `{ taskId, disposition: "stop" \| "keep_idle" }` |
 | `task_reject` | s→a | verdict with revision feedback: `{ taskId, feedback }` → delivered to the same worker session as a new prompt |
 | `sessions_report` | a→s | session registry sync: metadata for all sessions on the agent's machine (on connect + on change) |
+| `deliver` / `delivered` | s→a, a→s | land accepted work: `{ taskId, mode: "branch" \| "pr" \| "patch" }` → branch push, PR URL, or patch payload |
+| `ui_request` / `ui_response` | a→s, s→a | forwarded worker extension-UI dialogs (confirm/select/input) for policy auto-answer or human escalation |
 | `fs_read` / `fs_list` / `fs_grep` / `fs_diff` | s→a | read-only file service answered by the agent (no worker LLM involved): file content (text, or base64+mime for binary/image), dir listing, grep, git diff from the instance cwd; chunked responses, ~5 MB cap |
 | `session_search` / `session_hits` | s→a, a→s | content search runs on the agent (local grep over JSONL); only hits cross the wire |
 
@@ -121,6 +123,34 @@ pi natively persists worker sessions (JSONL, per-cwd) and exposes `switch_sessio
 ```
 
 Sync algorithm: fetch manifest → compare `bundleHash` to cache dirs → fetch only missing/changed files into a temp dir → validate every path (POSIX, no `..`, no absolute, no reserved names, no case collisions) → atomic rename to `~/.pi/agent/fleet-cache/<bundleHash>/` → record provenance.
+
+## Work delivery & workspace isolation
+
+**Delivery closes the loop.** `remote_accept { disposition, deliver }` supports:
+- `branch` — worker commits to `fleet/task-<id>`; agent pushes to origin (machine-local git creds)
+- `pr` — branch + `gh pr create` (requires `gh` + token on the worker machine; doctor checks)
+- `patch` — `fs_diff` payload applied server-side (small changes, no remote creds needed)
+- `none` — leave in place (inspect later)
+
+**Worktree-per-task.** The agent creates `git worktree` checkouts under `<repo>/.fleet-worktrees/task-<id>` from a base branch and spawns each task worker there; the worktree is removed after delivery. Two tasks on one repo never share a working directory. Baselines are primed against the main checkout; task clones run in worktrees, which also makes `remote_diff` unambiguous.
+
+## Worker dialogs (extension UI forwarding)
+
+Workers run headless, but bundle extensions may call `ctx.ui.confirm/select/input` — in RPC mode these emit extension-UI requests that would otherwise hang forever. Policy:
+1. The agent forwards them as `ui_request` frames.
+2. The server auto-answers when the bundle manifest declares a policy (`ui.autoAnswer`, e.g. permission-gate defaults).
+3. Otherwise it escalates to the human (notify + dialog) on the same wake-up path as `task_done`.
+4. Unanswered requests time out to a safe default (deny/cancel) and move the task to `escalated`.
+
+## Budgets & runaway protection
+
+- Manifest `budget: { maxCost?, maxTurns?, maxMinutes? }`; the agent aggregates pi's per-message usage and enforces — breach aborts the worker and emits `task_done { status: "budget_exceeded" }`, which flows into normal review.
+- Machine config `maxWorkers` caps concurrent instances per machine; spawns beyond it are refused (no queueing in v1).
+- `fleet_status` reports cost burn per worker, machine, and day.
+
+## Agent resilience
+
+The agent persists an instance registry (instanceId, pid, session path, task state) on disk. On restart it **re-adopts** still-running workers instead of orphaning or double-spawning them; instances whose pids are gone are reported `stopped` with their last known session path so sessions remain resumable. `hello` carries package versions alongside protocol `v`; `fleet doctor` flags server/agent/worker version skew.
 
 ## Remote file access (review channel)
 

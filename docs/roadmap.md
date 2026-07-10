@@ -45,6 +45,10 @@ Phased so every phase ends in something usable on its own. Later phases never re
 - Tools: `remote_spawn`, `remote_prompt` (blocking-until-settled and async variants), `remote_output`, `remote_abort`, `remote_stop`, `remote_accept`, `remote_reject`, `fleet_status`
 - Review file channel: `remote_diff`, `remote_read` (text + images as `ImageContent`), `remote_ls`, `remote_grep` — agent-answered, zero worker tokens, cwd-scoped, read-only
 - Task completion layer: `task_done` with agent-side disk outbox (at-least-once + ack + dedupe), orchestrator wake-up via injected `fleet-task-done` message (`triggerTurn`), `awaiting_review` → verify → accept/reject revision loop with `maxRejects` escalation
+- Work delivery: `remote_accept { deliver: branch | pr | patch | none }`; worktree-per-task isolation (agent-managed `git worktree`, cleanup after delivery)
+- Extension-UI forwarding: `ui_request`/`ui_response`, bundle `ui.autoAnswer` policy, human escalation, timeout → safe default + `escalated`
+- Budgets: manifest `budget {maxCost, maxTurns, maxMinutes}` enforced by the agent; machine `maxWorkers`; cost burn in `fleet_status`
+- Agent resilience: disk instance registry, orphan re-adoption on agent restart, version-skew reporting in `hello` + doctor
 - Live worker events surfaced through `onUpdate()` during blocking calls
 - `setWidget("fleet", ...)` dashboard: workers, states, current activity
 - Reconnect with backoff; workers survive server pi restarts (agent keeps them alive); snapshot-on-reattach
@@ -88,3 +92,10 @@ Phased so every phase ends in something usable on its own. Later phases never re
 - Multi-user fleets / ACLs beyond tailnet + whois allowlist
 - Web/phone viewer (possible later: HTTP page on the server listener)
 - Windows workers running Unix-assuming bundles (mitigated by `platforms` manifest field, not solved)
+
+## Backlog (acknowledged, not scheduled)
+
+- Task queueing/scheduling when `maxWorkers` is hit (v1 refuses)
+- Off-TUI notifications (ntfy/telegram/webhook) for task_done/escalations while away
+- Crash-log collection from dead workers (`stderr` capture shipping)
+- Self-update of the fleet package across machines

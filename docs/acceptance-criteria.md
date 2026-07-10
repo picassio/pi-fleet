@@ -70,6 +70,18 @@ Grouped by phase (see [roadmap](roadmap.md)). Each criterion is testable; unit/i
 
 **AC-3.8 Orchestrator restart.** Restarting the server pi while a worker runs: after restart and `/serve`, `fleet_status` re-lists the worker and `remote_output` returns its buffered/settled output via snapshot catch-up.
 
+**AC-3.9 Delivery modes.** `remote_accept` with `deliver: "branch"` results in a pushed `fleet/task-<id>` branch whose diff equals the worker's accepted diff; `"patch"` applies cleanly server-side for a change that touches no files modified on the server since spawn; `"pr"` on a machine without `gh` credentials fails with an actionable error before any commit is pushed.
+
+**AC-3.10 Worktree isolation.** Two concurrent tasks in the same repo run in separate worktrees, produce independent diffs, and never see each other's uncommitted changes; worktrees are removed after delivery, and an aborted task's worktree is cleaned up on the next agent sweep.
+
+**AC-3.11 UI forwarding.** A bundle extension calling `ctx.ui.confirm` in a worker surfaces on the server within 2 s (auto-answered if `ui.autoAnswer` matches, else human dialog); an unanswered request times out to the safe default and moves the task to `escalated` — the worker never hangs indefinitely.
+
+**AC-3.12 Budget enforcement.** A task exceeding `maxCost` (or `maxTurns`/`maxMinutes`) is aborted; `task_done { status: "budget_exceeded" }` flows through normal review; enforcement fires within one turn of the breach.
+
+**AC-3.13 Orphan re-adoption.** Restarting the agent while two workers run: both are re-adopted (same instanceIds, control resumes) with zero duplicate processes; a worker that died during the outage is reported `stopped` with its session path intact and resumable.
+
+**AC-3.14 Spawn cap.** Spawns beyond `maxWorkers` are refused with the current count in the error; no process is started.
+
 ## Phase 3.5 — Sessions: baselines & registry
 
 **AC-3.5.1 Baseline creation.** `remote_baseline(host, cwd)` produces a session that is primed (priming prompt ran), compacted, named `baseline:<repo>`, registered with `kind: baseline`, pinned, and stamped with the repo's git HEAD.
