@@ -37,6 +37,8 @@ export interface FleetManagerOptions {
 	agentPort?: number;
 	connectAgent?: (host: string, port: number) => Promise<AgentClient>;
 	registryUrl?: string;
+	/** Fired whenever a tracked instance reaches agent_settled. */
+	onSettled?: (instance: TrackedInstance) => void;
 }
 
 export class FleetManager {
@@ -213,6 +215,7 @@ export class FleetManager {
 			const waiters = this.settleWaiters.get(instanceId) ?? [];
 			this.settleWaiters.delete(instanceId);
 			for (const waiter of waiters) waiter();
+			if (waiters.length === 0) this.options.onSettled?.(tracked);
 		}
 	}
 }

@@ -109,7 +109,24 @@ export default async function piFleet(pi: ExtensionAPI): Promise<void> {
 function registerServerMode(pi: ExtensionAPI): void {
 	let fleet: FleetManager | undefined;
 	const getFleet = (): FleetManager => {
-		fleet ??= new FleetManager();
+		// Wake the orchestrator when an untracked (async-prompted) worker settles:
+		// the injected message triggers a review turn if pi is idle (docs/plan.md
+		// "Task completion & verification" step 3).
+		fleet ??= new FleetManager({
+			onSettled: (instance) => {
+				pi.sendMessage(
+					{
+						customType: "fleet-task-done",
+						content:
+							`Fleet worker ${instance.instanceId} on ${instance.host} settled. ` +
+							`Last assistant message:\n${instance.lastAssistant ?? "(none)"}\n` +
+							"Review the result (remote_output / fleet_status) and decide next steps.",
+						display: true,
+					},
+					{ triggerTurn: true, deliverAs: "followUp" },
+				);
+			},
+		});
 		return fleet;
 	};
 	const text = (value: string) => ({

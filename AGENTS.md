@@ -62,3 +62,18 @@ Docs are the spec. If implementation reveals a design flaw, update the doc **in 
 ## Security posture for contributors
 
 Treat every frame handler as hostile-input parsing: validate size, schema, then path safety, before any logic. The threat model lives in `docs/plan.md` (Security model) until `SECURITY.md` ships in Phase 2 — read it before touching listener, trust, fs, or deliver code.
+
+## Interactive E2E via tmux (required)
+
+Real users run pi interactively — never validate user-facing flows with `pi -p` alone. Drive the actual TUI in tmux:
+
+```bash
+tmux new-session -d -s fleet-e2e -x 120 -y 32
+tmux send-keys -t fleet-e2e "cd ~/projects/pi-fleet && pi --no-session -e ./src/index.ts" Enter
+sleep 12 && tmux capture-pane -t fleet-e2e -p | tail -20   # verify startup
+tmux send-keys -t fleet-e2e "<user prompt exercising fleet tools>" Enter
+sleep 45 && tmux capture-pane -t fleet-e2e -p               # verify tool calls, results, footer status
+tmux kill-session -t fleet-e2e
+```
+
+Check the footer for `fleet: N/M running` (setStatus) and the transcript for tool rows. Remote pieces (agent on a VM) must be running first; see the wiki page pi-fleet-extension-design for the current test topology.
