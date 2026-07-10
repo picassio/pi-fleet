@@ -52,19 +52,23 @@ All three roles ship in one pi package. A machine can hold multiple roles at onc
 
 Everything ships in this one package (runtime deps: `typebox`, `jiti` only; the pi package is a type-only devDependency, so production installs stay lean). Two roles, two install paths:
 
-**Server / orchestrator machine** (where you run pi interactively):
+Same official command on **every** machine (pi clones to `~/.pi/agent/git/github.com/picassio/pi-fleet` and runs a production `npm install`):
 
 ```bash
-pi install github:picassio/pi-fleet     # loads the extension: fleet tools, /serve, /fleet-*
+pi install git:github.com/picassio/pi-fleet
 ```
 
-**Worker / agent machines**:
+**Server / orchestrator machine**: that's it — the extension auto-loads in every pi session (fleet tools, `/fleet-*` commands).
+
+**Worker / agent machines**: run the agent from the installed package:
 
 ```bash
-npm install -g github:picassio/pi-fleet # provides the pi-fleet-agent bin
-pi-fleet-agent serve --server <your-machine-tailnet-name> [--max-workers 4]
-pi-fleet-agent install-service --server <name>   # systemd / launchd / schtasks
+PKG=~/.pi/agent/git/github.com/picassio/pi-fleet
+node $PKG/scripts/pi-fleet-agent.mjs serve --server <your-machine-tailnet-name> [--max-workers 4]
+node $PKG/scripts/pi-fleet-agent.mjs install-service --server <name>   # systemd / launchd / schtasks
 ```
+
+(`npm install -g github:picassio/pi-fleet` also works if you prefer `pi-fleet-agent` on PATH.)
 
 Workers spawned by the agent need **no** pi-fleet install of their own — the agent injects its extension copy via `-e`.
 
