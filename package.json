@@ -14,6 +14,9 @@
   "pi": {
     "extensions": ["./src/index.ts"]
   },
+  "bin": {
+    "pi-fleet-agent": "./scripts/pi-fleet-agent.mjs"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

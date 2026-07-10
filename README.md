@@ -48,12 +48,27 @@ All three roles ship in one pi package. A machine can hold multiple roles at onc
 - [Acceptance criteria](docs/acceptance-criteria.md)
 - [State flow](docs/state-flow.md) — lifecycle state machines and sequence flows
 
-## Prerequisites (every machine)
+## Install
 
-1. Node.js ≥ 20 and pi installed
-2. Tailscale up and authenticated
-3. Windows only: Git Bash (pi requirement)
-4. `pi install github:picassio/pi-fleet`
+Everything ships in this one package (runtime deps: `typebox`, `jiti` only; the pi package is a type-only devDependency, so production installs stay lean). Two roles, two install paths:
+
+**Server / orchestrator machine** (where you run pi interactively):
+
+```bash
+pi install github:picassio/pi-fleet     # loads the extension: fleet tools, /serve, /fleet-*
+```
+
+**Worker / agent machines**:
+
+```bash
+npm install -g github:picassio/pi-fleet # provides the pi-fleet-agent bin
+pi-fleet-agent serve --server <your-machine-tailnet-name> [--max-workers 4]
+pi-fleet-agent install-service --server <name>   # systemd / launchd / schtasks
+```
+
+Workers spawned by the agent need **no** pi-fleet install of their own — the agent injects its extension copy via `-e`.
+
+Prerequisites everywhere: Node ≥ 20, pi, Tailscale up; Windows additionally needs Git Bash (pi requirement).
 
 ## Status
 
