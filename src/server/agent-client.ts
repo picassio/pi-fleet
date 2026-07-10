@@ -20,6 +20,8 @@ export class AgentClient {
 	private readonly pending = new Map<string, { resolve: (frame: Frame) => void; reject: (error: Error) => void }>();
 	private eventHandler: AgentEventHandler | undefined;
 	private taskDoneHandler: TaskDoneHandler | undefined;
+	private sessionsHandler: ((frame: FrameOf<"sessions_report">) => void) | undefined;
+	lastSessionsReport: FrameOf<"sessions_report"> | undefined;
 	private helloFrame: FrameOf<"hello"> | undefined;
 	private helloWaiters: Array<(hello: FrameOf<"hello">) => void> = [];
 
@@ -69,6 +71,11 @@ export class AgentClient {
 
 	onEvent(handler: AgentEventHandler): void {
 		this.eventHandler = handler;
+	}
+
+	onSessionsReport(handler: (frame: FrameOf<"sessions_report">) => void): void {
+		this.sessionsHandler = handler;
+		if (this.lastSessionsReport) handler(this.lastSessionsReport);
 	}
 
 	/** task_done frames are auto-acked after the handler runs (at-least-once + ack). */
@@ -176,6 +183,11 @@ export class AgentClient {
 		}
 		if (frame.type === "event") {
 			this.eventHandler?.(frame.instanceId, frame.event);
+			return;
+		}
+		if (frame.type === "sessions_report") {
+			this.lastSessionsReport = frame;
+			this.sessionsHandler?.(frame);
 			return;
 		}
 		if (frame.type === "task_done") {

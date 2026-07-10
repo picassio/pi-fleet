@@ -617,6 +617,25 @@ function registerServerMode(pi: ExtensionAPI): void {
 	});
 
 	pi.registerTool({
+		name: "fleet_sessions",
+		label: "Fleet Sessions",
+		description: "List pi sessions on a fleet machine (agent-scanned; baselines and tasks flagged).",
+		parameters: Type.Object({ host: Type.String(), limit: Type.Optional(Type.Number()) }),
+		async execute(_id, params) {
+			const client = await getFleet().agent(params.host);
+			const report = client.lastSessionsReport;
+			if (!report) return text("no sessions report received yet from that agent");
+			const rows = report.sessions.slice(0, params.limit ?? 25);
+			if (rows.length === 0) return text("no sessions on that machine");
+			return text(
+				rows
+					.map((s) => `${s.kind}${s.pinned ? "(pinned)" : ""} ${s.name ?? s.sessionId} cwd=${s.cwd} ${new Date(s.updatedAt).toISOString()}`)
+					.join("\n"),
+			);
+		},
+	});
+
+	pi.registerTool({
 		name: "session_search",
 		label: "Session Search",
 		description: "Search pi session content on a fleet machine (grep runs on the agent; only hits return).",

@@ -50,3 +50,54 @@ export async function searchSessions(
 	await walk(base);
 	return hits;
 }
+
+export interface SessionListing {
+	sessionId: string;
+	path: string;
+	name?: string;
+	cwd: string;
+	kind: "baseline" | "task" | "scratch";
+	pinned: boolean;
+	updatedAt: number;
+}
+
+/** Best-effort session inventory: JSONL headers parsed, never pi imports. */
+export async function listSessions(root: string | undefined): Promise<SessionListing[]> {
+	const base = root ?? join(homedir(), ".pi", "agent", "sessions");
+	const sessions: SessionListing[] = [];
+
+	async function walk(dir: string): Promise<void> {
+		let entries;
+		try {
+			entries = await readdir(dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			const full = join(dir, entry.name);
+			if (entry.isDirectory()) {
+				await walk(full);
+			} else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+				try {
+					const info = await stat(full);
+					const firstLine = (await readFile(full, "utf8")).split("\n", 1)[0] ?? "";
+					const header = JSON.parse(firstLine) as { cwd?: string; name?: string };
+					const name = typeof header.name === "string" ? header.name : undefined;
+					sessions.push({
+						sessionId: basename(entry.name, ".jsonl"),
+						path: full,
+						...(name ? { name } : {}),
+						cwd: typeof header.cwd === "string" ? header.cwd : "(unknown)",
+						kind: name?.startsWith("baseline:") ? "baseline" : name?.startsWith("task:") ? "task" : "scratch",
+						pinned: name?.startsWith("baseline:") ?? false,
+						updatedAt: info.mtimeMs,
+					});
+				} catch {
+					// unparseable session: skip
+				}
+			}
+		}
+	}
+	await walk(base);
+	return sessions.sort((a, b) => b.updatedAt - a.updatedAt);
+}

@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { InstanceSupervisor, type SupervisorOptions } from "./instances.ts";
 import { fsDiff, fsGrep, fsList, fsRead } from "./fsservice.ts";
 import { TaskOutbox } from "./outbox.ts";
-import { searchSessions } from "./sessions.ts";
+import { listSessions, searchSessions } from "./sessions.ts";
 
 export const AGENT_DEFAULT_PORT = 9788;
 export const PACKAGE_VERSION = "0.0.1";
@@ -204,6 +204,15 @@ async function handleConnection(
 	for (const pending of await outbox.pending()) {
 		connection.trySend(pending);
 	}
+
+	// Session registry push: agent disk is the source of truth (AC-3.5.4).
+	connection.trySend({
+		v: 1,
+		type: "sessions_report",
+		machine: options.machine,
+		full: true,
+		sessions: await listSessions(options.sessionsDir),
+	});
 
 	connection.onFrame((frame) => {
 		if (frame.type === "task_done_ack") {

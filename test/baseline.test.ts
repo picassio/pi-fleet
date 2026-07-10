@@ -180,7 +180,7 @@ describe("AC-3.5.5 session_search", () => {
 		const { mkdir: mk, writeFile: wf } = await import("node:fs/promises");
 		const sessionsDir = await mkdtemp(join(tmpdir(), "pf-sessions-"));
 		await mk(join(sessionsDir, "proj"), { recursive: true });
-		await wf(join(sessionsDir, "proj", "abc123.jsonl"), '{"type":"message","text":"refactor the auth flow"}\n');
+		await wf(join(sessionsDir, "proj", "abc123.jsonl"), JSON.stringify({ cwd: "/repo", name: "baseline:api" }) + "\n" + JSON.stringify({ type: "message", text: "refactor the auth flow" }) + "\n");
 		await wf(join(sessionsDir, "proj", "zzz.jsonl"), '{"type":"message","text":"unrelated"}\n');
 
 		const workerPath = await makeRpcWorker();
@@ -195,6 +195,12 @@ describe("AC-3.5.5 session_search", () => {
 		});
 		const client = await AgentClient.connect("127.0.0.1", running.port);
 		try {
+			// AC-3.5.4 core: sessions_report pushed on connect from agent disk.
+			const report = await new Promise<{ sessions: Array<{ sessionId: string; kind: string; cwd: string }> }>(
+				(resolvePromise) => client.onSessionsReport(resolvePromise),
+			);
+			expect(report.sessions.map((entry) => entry.sessionId).sort()).toEqual(["abc123", "zzz"]);
+
 			const hits = await client.sessionSearch("auth flow");
 			expect(hits).toHaveLength(1);
 			expect(hits[0]?.sessionId).toBe("abc123");
