@@ -60,19 +60,21 @@ pi install git:github.com/picassio/pi-fleet
 
 **Server / orchestrator machine**: that's it — the extension auto-loads in every pi session (fleet tools, `/fleet-*` commands).
 
-**Worker / agent machines — simplest: just the extension.** After `pi install`, open pi on that machine and type:
+**Worker / agent machines** — after the same `pi install`, open pi there and pick one:
 
 ```
-/fleet-agent <your-server-tailnet-name>
+/fleet-agent <your-server-tailnet-name>     # this pi session IS the agent (lives with the session)
+/fleet-service <your-server-tailnet-name>   # install + start the durable agent service (systemd/launchd)
 ```
 
-That pi session now serves as the fleet agent (workers live while the session runs). For a durable headless agent instead (Linux/macOS) — one command:
+No curl, no scripts — the extension carries everything. For Claude Code subscription auth on workers, also `pi install git:github.com/picassio/pi-cc-patch` on that machine.
+
+<details><summary>Headless bootstrap (optional, for machines where you never open pi)</summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/picassio/pi-fleet/main/scripts/bootstrap-agent.sh | sh -s -- --server <your-machine-tailnet-name> [--max-workers 4] [--with-cc-patch]
+curl -fsSL https://raw.githubusercontent.com/picassio/pi-fleet/main/scripts/bootstrap-agent.sh | sh -s -- --server <name> [--max-workers 4] [--with-cc-patch]
 ```
-
-This runs the official `pi install git:...`, then starts the agent as a systemd user service (falls back to nohup; idempotent, safe to re-run for updates). Windows: `pi install git:github.com/picassio/pi-fleet`, then `node %USERPROFILE%\.pi\agent\git\github.com\picassio\pi-fleet\scripts\pi-fleet-agent.mjs install-service --server <name>`.
+</details>
 
 Workers spawned by the agent need **no** install at all — the agent injects its extension copy via `-e`, and they auto-load any pi packages installed on that machine.
 

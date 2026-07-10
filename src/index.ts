@@ -12,7 +12,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { hostname } from "node:os";
 import { FleetManager } from "./server/fleet.ts";
+import { execFile } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { startAgentDaemon, AGENT_DEFAULT_PORT, type RunningAgent } from "./agent/daemon.ts";
+import { generateLaunchdPlist, generateSystemdUnit } from "./agent/service.ts";
 import { Tailscale } from "./core/tailscale.ts";
 import { loadBundleExtensions, type BundleExtensionLoadResult } from "./worker/host.ts";
 import {
@@ -233,6 +239,51 @@ function registerServerMode(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", async () => {
 		await fleet?.close();
 		fleet = undefined;
+	});
+
+	pi.registerCommand("fleet-service", {
+		description: "Install + start the durable fleet agent service on this machine: /fleet-service <pinned-server>",
+		handler: async (args, ctx) => {
+			const pinnedServer = args?.trim();
+			if (!pinnedServer) {
+				if (ctx.hasUI) ctx.ui.notify("usage: /fleet-service <pinned-server-machine-name>", "error");
+				return;
+			}
+			const spec = {
+				nodePath: process.execPath,
+				entryPath: join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "pi-fleet-agent.mjs"),
+				pinnedServer,
+				port: AGENT_DEFAULT_PORT,
+			};
+			const run = (cmd: string, cmdArgs: string[]) =>
+				new Promise<void>((resolvePromise, rejectPromise) => {
+					execFile(cmd, cmdArgs, (error) => (error ? rejectPromise(error) : resolvePromise()));
+				});
+			try {
+				if (process.platform === "linux") {
+					const unit = generateSystemdUnit(spec);
+					const path = join(homedir(), unit.path);
+					await mkdir(join(path, ".."), { recursive: true });
+					await writeFile(path, unit.content, "utf8");
+					await run("systemctl", ["--user", "daemon-reload"]);
+					await run("systemctl", ["--user", "enable", "--now", "pi-fleet-agent"]);
+					if (ctx.hasUI) ctx.ui.notify(`fleet service installed + started (systemd user, pinned ${pinnedServer})`, "info");
+				} else if (process.platform === "darwin") {
+					const plist = generateLaunchdPlist(spec);
+					const path = join(homedir(), plist.path);
+					await mkdir(join(path, ".."), { recursive: true });
+					await writeFile(path, plist.content, "utf8");
+					await run("launchctl", ["load", path]);
+					if (ctx.hasUI) ctx.ui.notify(`fleet service installed + started (launchd, pinned ${pinnedServer})`, "info");
+				} else {
+					if (ctx.hasUI) {
+						ctx.ui.notify("Windows: run the schtasks command printed by: node <pkg>/scripts/pi-fleet-agent.mjs install-service --server " + pinnedServer, "warning");
+					}
+				}
+			} catch (error) {
+				if (ctx.hasUI) ctx.ui.notify(`fleet-service failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+			}
+		},
 	});
 
 	let agentRunning: RunningAgent | undefined;
