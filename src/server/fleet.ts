@@ -303,7 +303,7 @@ export class FleetManager {
 			| { type: "fs_read"; path: string; offset?: number; limit?: number }
 			| { type: "fs_list"; path: string }
 			| { type: "fs_grep"; pattern: string; glob?: string }
-			| { type: "fs_diff"; ref?: string; staged?: boolean; stat?: boolean },
+			| { type: "fs_diff"; ref?: string; staged?: boolean; stat?: boolean; revParse?: boolean },
 	) {
 		const tracked = this.mustGet(instanceId);
 		const client = await this.agent(tracked.host);
@@ -413,4 +413,5 @@ export interface BaselineRecord {
 	sessionPath: string;
 	bundle: string;
 	createdAt: number;
+	gitHead?: string;
 }

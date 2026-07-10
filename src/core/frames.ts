@@ -285,6 +285,8 @@ const frameSchemas = {
 		ref: Type.Optional(Type.String()),
 		staged: Type.Optional(Type.Boolean()),
 		stat: Type.Optional(Type.Boolean()),
+		/** Return `git rev-parse HEAD` instead of a diff. */
+		revParse: Type.Optional(Type.Boolean()),
 	}),
 	fs_result: Type.Object({
 		...base,

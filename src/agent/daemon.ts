@@ -369,6 +369,7 @@ async function dispatch(
 									...(frame.ref !== undefined ? { ref: frame.ref } : {}),
 									...(frame.staged !== undefined ? { staged: frame.staged } : {}),
 									...(frame.stat !== undefined ? { stat: frame.stat } : {}),
+									...(frame.revParse !== undefined ? { revParse: frame.revParse } : {}),
 								});
 			connection.send({ v: 1, type: "fs_result", ...payload, ...(frame.id ? { id: frame.id } : {}) });
 			return;

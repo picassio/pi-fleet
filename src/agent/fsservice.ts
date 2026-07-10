@@ -163,12 +163,17 @@ export async function fsGrep(cwd: string, pattern: string, glob?: string): Promi
 
 export async function fsDiff(
 	cwd: string,
-	options: { ref?: string; staged?: boolean; stat?: boolean } = {},
+	options: { ref?: string; staged?: boolean; stat?: boolean; revParse?: boolean } = {},
 ): Promise<FsResultPayload> {
-	const args = ["diff"];
+	const args = options.revParse ? ["rev-parse", "HEAD"] : ["diff"];
+	if (options.revParse) return runGit(cwd, args);
 	if (options.staged) args.push("--staged");
 	if (options.stat) args.push("--stat");
 	if (options.ref) args.push(options.ref);
+	return runGit(cwd, args);
+}
+
+async function runGit(cwd: string, args: string[]): Promise<FsResultPayload> {
 	const result = await new Promise<{ stdout: string; stderr: string; code: number }>((resolvePromise) => {
 		execFile(
 			"git",

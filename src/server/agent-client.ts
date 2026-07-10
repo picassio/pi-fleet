@@ -127,7 +127,7 @@ export class AgentClient {
 			| { type: "fs_read"; instanceId: string; path: string; offset?: number; limit?: number }
 			| { type: "fs_list"; instanceId: string; path: string }
 			| { type: "fs_grep"; instanceId: string; pattern: string; glob?: string }
-			| { type: "fs_diff"; instanceId: string; ref?: string; staged?: boolean; stat?: boolean },
+			| { type: "fs_diff"; instanceId: string; ref?: string; staged?: boolean; stat?: boolean; revParse?: boolean },
 	): Promise<FrameOf<"fs_result">> {
 		const response = await this.request({ v: 1, ...request } as Frame);
 		if (response.type === "fs_result") return response;

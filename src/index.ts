@@ -265,17 +265,29 @@ function registerServerMode(pi: ExtensionAPI): void {
 				bundle: params.bundle ?? baseline?.bundle ?? "default",
 				...(params.maxCost !== undefined ? { maxCost: params.maxCost } : {}),
 			});
+			let staleNote = "";
 			if (baseline) {
 				// Clone-on-spawn: attach to the pinned baseline, duplicate the branch
 				// into a NEW session file, work in the clone (baseline never written).
 				await manager.rpcRequest(tracked.instanceId, { type: "switch_session", sessionPath: baseline.sessionPath });
 				await manager.rpcRequest(tracked.instanceId, { type: "clone" });
+				if (baseline.gitHead) {
+					try {
+						const head = await manager.fs(tracked.instanceId, { type: "fs_diff", revParse: true });
+						const current = head.text?.trim();
+						if (current && current !== baseline.gitHead) {
+							staleNote = ` WARNING: baseline_stale — repo HEAD ${current.slice(0, 12)} != baseline HEAD ${baseline.gitHead.slice(0, 12)}; consider re-priming`;
+						}
+					} catch {
+						// staleness check best-effort
+					}
+				}
 			}
 			updateStatus(ctx);
 			return {
 				...text(
 					`spawned ${tracked.instanceId} on ${tracked.host} (bundle ${tracked.bundle}` +
-						`${baseline ? `, warm from baseline ${baseline.label}` : ""})`,
+						`${baseline ? `, warm from baseline ${baseline.label}` : ""})${staleNote}`,
 				),
 				details: { instanceId: tracked.instanceId },
 			};
@@ -495,6 +507,13 @@ function registerServerMode(pi: ExtensionAPI): void {
 			await manager.rpcRequest(tracked.instanceId, { type: "set_session_name", name: `baseline:${params.label}` });
 			const state = await manager.rpcRequest(tracked.instanceId, { type: "get_state" });
 			const sessionPath = sessionFileFrom(state);
+			let gitHead: string | undefined;
+			try {
+				const head = await manager.fs(tracked.instanceId, { type: "fs_diff", revParse: true });
+				gitHead = head.text?.trim() || undefined;
+			} catch {
+				// not a git repo: staleness tracking unavailable
+			}
 			await manager.stop(tracked.instanceId);
 			updateStatus(ctx);
 			if (!sessionPath) throw new Error("could not determine the baseline session file from get_state");
@@ -505,8 +524,9 @@ function registerServerMode(pi: ExtensionAPI): void {
 				sessionPath,
 				bundle: params.bundle ?? "default",
 				createdAt: Date.now(),
+				...(gitHead ? { gitHead } : {}),
 			});
-			return text(`baseline "${params.label}" recorded (${sessionPath} on ${params.host})`);
+			return text(`baseline "${params.label}" recorded (${sessionPath} on ${params.host}${gitHead ? `, HEAD ${gitHead.slice(0, 12)}` : ""})`);
 		},
 	});
 

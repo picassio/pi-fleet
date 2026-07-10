@@ -143,3 +143,16 @@ describe("fsservice bounds (direct)", () => {
 		expect(Buffer.byteLength(result.text ?? "", "utf8")).toBeLessThanOrEqual(50 * 1024);
 	});
 });
+
+describe("fs_diff revParse", () => {
+	it("returns the repo HEAD hash", async () => {
+		const workspace = await makeWorkspace();
+		execFileSync("git", ["init", "-q"], { cwd: workspace });
+		execFileSync("git", ["add", "-A"], { cwd: workspace });
+		execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: workspace });
+		const agentClient = await setup(workspace);
+		const instanceId = await spawnedId(agentClient);
+		const head = await agentClient.fs({ type: "fs_diff", instanceId, revParse: true });
+		expect(head.text?.trim()).toMatch(/^[0-9a-f]{40}$/);
+	});
+});
