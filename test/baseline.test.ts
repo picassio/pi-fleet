@@ -128,3 +128,19 @@ describe("Phase 3.5 baselines", () => {
 		expect(calls).toContain("clone");
 	});
 });
+
+describe("Phase 4 enforcement", () => {
+	it("AC-4.3: platform-mismatched bundles are refused before spawn", async () => {
+		const manager = await setup();
+		const { mkdir: mkdirFs, writeFile: writeFs } = await import("node:fs/promises");
+		const bundleDir = join(manager.registryRoot, "linux-only");
+		await mkdirFs(bundleDir, { recursive: true });
+		await writeFs(
+			join(bundleDir, "manifest.json"),
+			JSON.stringify({ v: 1, name: "linux-only", bundleHash: "0".repeat(64), platforms: ["fake-os"], files: [] }),
+		);
+		await expect(
+			manager.spawn({ host: "127.0.0.1", cwd: tmpdir(), bundle: "linux-only" }),
+		).rejects.toThrow(/targets \[fake-os\]/);
+	});
+});

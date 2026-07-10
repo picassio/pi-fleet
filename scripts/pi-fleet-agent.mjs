@@ -39,6 +39,7 @@ if (command === "serve") {
 		machine: hostname(),
 		pinnedServer,
 		whois: (ip) => tailscale.whois(ip),
+		...(flag("max-workers") ? { maxWorkers: Number(flag("max-workers")) } : {}),
 		log: (line) => console.log(`[${new Date().toISOString()}] ${line}`),
 	});
 	console.log(`pi-fleet agent on ${running.host}:${running.port} (pinned: ${pinnedServer})`);

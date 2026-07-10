@@ -151,6 +151,28 @@ export class FleetManager {
 		bundleHash?: string;
 	}): Promise<TrackedInstance> {
 		const client = await this.agent(request.host);
+
+		// Platform enforcement (AC-4.3): refuse before any process starts.
+		try {
+			const manifestRaw = await readFile(
+				join(this.registryRoot, request.bundle, "manifest.json"),
+				"utf8",
+			);
+			const platforms = (JSON.parse(manifestRaw) as { platforms?: string[] }).platforms;
+			if (platforms && platforms.length > 0) {
+				const agentPlatform = (await client.hello()).platform;
+				if (!platforms.includes(agentPlatform)) {
+					throw new Error(
+						`bundle "${request.bundle}" targets [${platforms.join(", ")}] but ${request.host} runs ${agentPlatform}`,
+					);
+				}
+			}
+		} catch (error) {
+			if (error instanceof Error && error.message.includes("targets [")) throw error;
+			// Manifest unreadable locally (remote registryUrl case): the worker's
+			// own sync validates the manifest; platform check is best-effort here.
+		}
+
 		const registryUrl = await this.registryUrlFor();
 		const instance = await client.spawn({
 			cwd: request.cwd,

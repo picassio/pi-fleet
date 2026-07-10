@@ -208,3 +208,22 @@ async function expectPoll(condition: () => boolean, timeoutMs = 5_000): Promise<
 		await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
 	}
 }
+
+describe("AC-3.14 maxWorkers", () => {
+	it("refuses spawns beyond the cap with the current count, no process started", async () => {
+		const workerPath = await makeFakeWorker();
+		running = await startAgentDaemon({
+			host: "127.0.0.1",
+			port: 0,
+			machine: "buildbox",
+			pinnedServer: "claude3-10",
+			maxWorkers: 1,
+			whois: async () => SERVER_IDENTITY,
+			supervisor: { resolveCommand: async () => ({ command: process.execPath, args: [workerPath] }) },
+		});
+		client = await AgentClient.connect("127.0.0.1", running.port);
+		await client.spawn({ cwd: tmpdir(), bundle: "default" });
+		await expect(client.spawn({ cwd: tmpdir(), bundle: "default" })).rejects.toThrow(/max_workers.*1\/1/);
+		expect((await client.list()).filter((entry) => entry.state === "running")).toHaveLength(1);
+	});
+});

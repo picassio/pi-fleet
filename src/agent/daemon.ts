@@ -29,6 +29,8 @@ export interface AgentDaemonOptions {
 	supervisor?: SupervisorOptions;
 	/** Outbox directory (default ~/.pi/agent/fleet-agent/outbox). */
 	outboxDir?: string;
+	/** Refuse spawns beyond this many running instances (AC-3.14). */
+	maxWorkers?: number;
 	heartbeatIntervalMs?: number;
 	heartbeatTimeoutMs?: number;
 	log?: (line: string) => void;
@@ -190,7 +192,7 @@ async function handleConnection(
 		if (frame.type === "rpc" && frame.taskId) {
 			pendingTasks.set(frame.instanceId, frame.taskId);
 		}
-		void dispatch(frame, connection, supervisor).catch((error) => {
+		void dispatch(frame, connection, supervisor, options).catch((error) => {
 			connection.trySend({
 				v: 1,
 				type: "error",
@@ -205,6 +207,7 @@ async function dispatch(
 	frame: Frame,
 	connection: FrameConnection,
 	supervisor: InstanceSupervisor,
+	agentOptions: AgentDaemonOptions,
 ): Promise<void> {
 	switch (frame.type) {
 		case "hello":
@@ -222,6 +225,20 @@ async function dispatch(
 		}
 		case "spawn": {
 			const request = frame as FrameOf<"spawn">;
+			const limit = agentOptions.maxWorkers;
+			if (limit !== undefined) {
+				const runningCount = supervisor.list().filter((record) => record.state === "running").length;
+				if (runningCount >= limit) {
+					connection.send({
+						v: 1,
+						type: "spawn_error",
+						code: "max_workers",
+						message: `machine at capacity: ${runningCount}/${limit} workers running`,
+						...(request.id ? { id: request.id } : {}),
+					});
+					return;
+				}
+			}
 			try {
 				const record = await supervisor.spawn({
 					cwd: request.cwd,
