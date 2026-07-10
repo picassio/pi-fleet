@@ -108,12 +108,34 @@ export default async function piFleet(pi: ExtensionAPI): Promise<void> {
 
 function registerServerMode(pi: ExtensionAPI): void {
 	let fleet: FleetManager | undefined;
+	let lastUi: { setWidget(key: string, lines?: string[]): void; setStatus(key: string, text?: string): void } | undefined;
+	const renderFleet = () => {
+		if (!lastUi || !fleet) return;
+		const instances = fleet.status();
+		if (instances.length === 0) {
+			lastUi.setWidget("fleet", undefined);
+			lastUi.setStatus("fleet", undefined);
+			return;
+		}
+		const running = instances.filter((entry) => entry.state === "running").length;
+		lastUi.setStatus("fleet", `fleet: ${running}/${instances.length} running`);
+		lastUi.setWidget(
+			"fleet",
+			instances.map((entry) => {
+				const flag =
+					entry.review === "awaiting" ? "REVIEW" : entry.settled ? "settled" : entry.state === "running" ? "busy" : entry.state;
+				return `⏵ ${entry.instanceId} ${entry.host} ${entry.bundle} [${flag}]`;
+			}),
+		);
+	};
 	const getFleet = (): FleetManager => {
 		// Wake the orchestrator when an untracked (async-prompted) worker settles:
 		// the injected message triggers a review turn if pi is idle (docs/plan.md
 		// "Task completion & verification" step 3).
 		fleet ??= new FleetManager({
+			onChange: renderFleet,
 			onTaskDone: (frame) => {
+				renderFleet();
 				pi.sendMessage(
 					{
 						customType: "fleet-task-done",
@@ -146,11 +168,12 @@ function registerServerMode(pi: ExtensionAPI): void {
 		content: [{ type: "text" as const, text: value }],
 		details: {} as Record<string, unknown>,
 	});
-	const updateStatus = (ctx: { hasUI: boolean; ui: { setStatus(k: string, v?: string): void } }) => {
-		if (!ctx.hasUI || !fleet) return;
-		const instances = fleet.status();
-		const running = instances.filter((entry) => entry.state === "running").length;
-		ctx.ui.setStatus("fleet", instances.length === 0 ? undefined : `fleet: ${running}/${instances.length} running`);
+	const updateStatus = (ctx: {
+		hasUI: boolean;
+		ui: { setStatus(k: string, v?: string): void; setWidget(k: string, lines?: string[]): void };
+	}) => {
+		if (ctx.hasUI) lastUi = ctx.ui;
+		renderFleet();
 	};
 
 	pi.on("session_shutdown", async () => {

@@ -42,6 +42,10 @@ export interface FleetManagerOptions {
 	onSettled?: (instance: TrackedInstance) => void;
 	/** Fired once per unique durable task_done (deduped by instanceId+taskId+seq). */
 	onTaskDone?: (frame: { taskId: string; instanceId: string; seq: number; summary: string }) => void;
+	/** Fired on any fleet change worth re-rendering (spawn/stop/settle/task_done/reconnect). */
+	onChange?: () => void;
+	/** Disable auto-reconnect (tests). */
+	autoReconnect?: boolean;
 }
 
 export class FleetManager {
@@ -50,6 +54,8 @@ export class FleetManager {
 	private readonly settleWaiters = new Map<string, Array<() => void>>();
 	private registry: RunningRegistryServer | undefined;
 	private readonly seenTaskDone = new Set<string>();
+	private readonly reconnectTimers = new Map<string, NodeJS.Timeout>();
+	private closed = false;
 	private readonly options: FleetManagerOptions;
 	readonly registryRoot: string;
 
@@ -78,7 +84,44 @@ export class FleetManager {
 			this.options.onTaskDone?.(frame);
 		});
 		this.agents.set(host, client);
+		// Auto-reconnect with backoff: durable task_done replay only arrives
+		// while a connection exists, so do not wait for the next tool call.
+		if (this.options.autoReconnect !== false) this.watchConnection(host, client, 1_000);
+		this.options.onChange?.();
 		return client;
+	}
+
+	private watchConnection(host: string, client: AgentClient, backoffMs: number): void {
+		const poll = setInterval(() => {
+			if (!client.isClosed) return;
+			clearInterval(poll);
+			if (this.closed) return;
+			this.options.onChange?.();
+			const timer = setTimeout(() => {
+				this.reconnectTimers.delete(host);
+				void this.agent(host)
+					.then(() => this.options.onChange?.())
+					.catch(() => {
+						if (!this.closed) this.watchClosed(host, Math.min(backoffMs * 2, 30_000));
+					});
+			}, backoffMs);
+			timer.unref?.();
+			this.reconnectTimers.set(host, timer);
+		}, 500);
+		poll.unref?.();
+	}
+
+	private watchClosed(host: string, backoffMs: number): void {
+		const timer = setTimeout(() => {
+			this.reconnectTimers.delete(host);
+			void this.agent(host)
+				.then(() => this.options.onChange?.())
+				.catch(() => {
+					if (!this.closed) this.watchClosed(host, Math.min(backoffMs * 2, 30_000));
+				});
+		}, backoffMs);
+		timer.unref?.();
+		this.reconnectTimers.set(host, timer);
 	}
 
 	/** Registry URL workers should sync from; starts the HTTP registry lazily. */
@@ -211,6 +254,9 @@ export class FleetManager {
 	}
 
 	async close(): Promise<void> {
+		this.closed = true;
+		for (const timer of this.reconnectTimers.values()) clearTimeout(timer);
+		this.reconnectTimers.clear();
 		for (const client of this.agents.values()) client.close();
 		this.agents.clear();
 		await this.registry?.close();
@@ -238,6 +284,7 @@ export class FleetManager {
 			if (text.length > 0) tracked.lastAssistant = text;
 		}
 		if (event.type === "agent_settled") {
+			this.options.onChange?.();
 			tracked.settled = true;
 			const waiters = this.settleWaiters.get(instanceId) ?? [];
 			this.settleWaiters.delete(instanceId);
