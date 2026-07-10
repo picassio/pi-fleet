@@ -149,6 +149,7 @@ export class FleetManager {
 		cwd: string;
 		bundle: string;
 		bundleHash?: string;
+		maxCost?: number;
 	}): Promise<TrackedInstance> {
 		const client = await this.agent(request.host);
 
@@ -178,6 +179,7 @@ export class FleetManager {
 			cwd: request.cwd,
 			bundle: request.bundle,
 			...(request.bundleHash ? { bundleHash: request.bundleHash } : {}),
+			...(request.maxCost !== undefined ? { budget: { maxCost: request.maxCost } } : {}),
 			env: { PI_FLEET_SERVER: registryUrl },
 		});
 		const tracked: TrackedInstance = {

@@ -31,6 +31,8 @@ export interface AgentDaemonOptions {
 	outboxDir?: string;
 	/** Refuse spawns beyond this many running instances (AC-3.14). */
 	maxWorkers?: number;
+	/** Internal: wired by startAgentDaemon to register per-instance budgets. */
+	registerBudget?: (instanceId: string, maxCost: number) => void;
 	heartbeatIntervalMs?: number;
 	heartbeatTimeoutMs?: number;
 	log?: (line: string) => void;
@@ -53,6 +55,9 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 	/** instanceId → pending taskId (set by rpc prompt frames carrying taskId). */
 	const pendingTasks = new Map<string, string>();
 	const lastAssistant = new Map<string, string>();
+	const budgets = new Map<string, number>(); // instanceId -> maxCost
+	const costs = new Map<string, number>(); // instanceId -> accumulated cost
+	const budgetExceeded = new Set<string>();
 
 	const supervisor = new InstanceSupervisor({
 		...options.supervisor,
@@ -65,6 +70,17 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 				type?: string;
 				message?: { role?: string; content?: Array<{ type?: string; text?: string }> };
 			};
+			const usage = (event as { message?: { usage?: { cost?: { total?: number } } } }).message?.usage;
+			if (typeof usage?.cost?.total === "number") {
+				const total = (costs.get(instanceId) ?? 0) + usage.cost.total;
+				costs.set(instanceId, total);
+				const maxCost = budgets.get(instanceId);
+				if (maxCost !== undefined && total > maxCost && !budgetExceeded.has(instanceId)) {
+					budgetExceeded.add(instanceId);
+					log(`instance ${instanceId} exceeded budget ($${total.toFixed(4)} > $${maxCost}); aborting`);
+					supervisor.writeRpc(instanceId, { type: "abort" });
+				}
+			}
 			if (typed.type === "message_end" && typed.message?.role === "assistant") {
 				const textParts = (typed.message.content ?? [])
 					.filter((part) => part.type === "text" && typeof part.text === "string")
@@ -82,7 +98,7 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 						taskId,
 						instanceId,
 						seq: Date.now(),
-						status: "settled" as const,
+						status: budgetExceeded.has(instanceId) ? ("budget_exceeded" as const) : ("settled" as const),
 						summary: (lastAssistant.get(instanceId) ?? "(no assistant output)").slice(0, 2_000),
 						...(lastAssistant.get(instanceId)
 							? { lastAssistantMessage: lastAssistant.get(instanceId) as string }
@@ -100,6 +116,8 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 			log(`instance ${instanceId} exited (${code})`);
 		},
 	});
+
+	options.registerBudget = (instanceId, maxCost) => budgets.set(instanceId, maxCost);
 
 	const server = createServer((socket) => {
 		void handleConnection(socket, options, supervisor, connections, log, outbox, pendingTasks).catch((error) => {
@@ -247,6 +265,9 @@ async function dispatch(
 					...(request.env ? { env: request.env } : {}),
 					...(request.traceId ? { traceId: request.traceId } : {}),
 				});
+				if (request.budget?.maxCost !== undefined) {
+					agentOptions.registerBudget?.(record.instanceId, request.budget.maxCost);
+				}
 				connection.send({
 					v: 1,
 					type: "spawned",

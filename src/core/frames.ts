@@ -96,6 +96,7 @@ const frameSchemas = {
 		fromSession: Type.Optional(Type.String()),
 		model: Type.Optional(ModelRef),
 		env: Type.Optional(Type.Record(Type.String(), Type.String())),
+		budget: Type.Optional(Type.Object({ maxCost: Type.Optional(Type.Number()) })),
 	}),
 	spawned: Type.Object({
 		...base,

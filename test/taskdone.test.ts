@@ -141,3 +141,54 @@ describe("durable task_done", () => {
 		expect(received).toHaveLength(1);
 	});
 });
+
+describe("AC-3.12 budget enforcement", () => {
+	it("aborts on cost breach and reports task_done budget_exceeded", async () => {
+		const outboxDir = await mkdtemp(join(tmpdir(), "pf-outbox-"));
+		// Worker: each prompt emits a $2 message_end without settling; abort settles it.
+		const dir = await mkdtemp(join(tmpdir(), "pf-budget-worker-"));
+		const workerPath = join(dir, "worker.mjs");
+		await writeFile(
+			workerPath,
+			`
+let buffer = "";
+const send = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+	buffer += chunk;
+	let i;
+	while ((i = buffer.indexOf("\\n")) !== -1) {
+		const line = buffer.slice(0, i); buffer = buffer.slice(i + 1);
+		if (!line.trim()) continue;
+		const cmd = JSON.parse(line);
+		if (cmd.type === "prompt") {
+			setTimeout(() => send({ type: "message_end", message: { role: "assistant", usage: { cost: { total: 2 } }, content: [{ type: "text", text: "spending..." }] } }), 50);
+			setTimeout(() => send({ type: "message_end", message: { role: "assistant", usage: { cost: { total: 2 } }, content: [{ type: "text", text: "more spending" }] } }), 120);
+		} else if (cmd.type === "abort") {
+			send({ type: "agent_settled" });
+		}
+	}
+});
+process.stdin.on("end", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+			"utf8",
+		);
+		running = await startAgentDaemon({
+			host: "127.0.0.1",
+			port: 0,
+			machine: "buildbox",
+			pinnedServer: "claude3-10",
+			whois: async () => ({ machine: "claude3-10", user: "ana@github" }),
+			outboxDir,
+			supervisor: { resolveCommand: async () => ({ command: process.execPath, args: [workerPath] }) },
+		});
+		const received: Array<{ taskId: string; status?: string }> = [];
+		const manager = makeManager(running.port, (frame) => received.push(frame as { taskId: string; status?: string }));
+		const tracked = await manager.spawn({ host: "127.0.0.1", cwd: tmpdir(), bundle: "default", maxCost: 3 });
+		await manager.prompt(tracked.instanceId, "burn tokens", "t-budget");
+		await poll(() => received.length === 1, 10_000);
+		expect(received[0]?.taskId).toBe("t-budget");
+		expect(received[0]?.status).toBe("budget_exceeded");
+	});
+});

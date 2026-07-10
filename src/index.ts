@@ -250,6 +250,7 @@ function registerServerMode(pi: ExtensionAPI): void {
 			cwd: Type.String({ description: "Working directory on the remote machine" }),
 			bundle: Type.Optional(Type.String({ description: "Bundle name (default: default)" })),
 			fromBaseline: Type.Optional(Type.String({ description: "Baseline label: start warm by cloning it" })),
+			maxCost: Type.Optional(Type.Number({ description: "Abort the worker if its LLM cost exceeds this (USD)" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const manager = getFleet();
@@ -262,6 +263,7 @@ function registerServerMode(pi: ExtensionAPI): void {
 				host: baseline?.host ?? params.host,
 				cwd: baseline?.cwd ?? params.cwd,
 				bundle: params.bundle ?? baseline?.bundle ?? "default",
+				...(params.maxCost !== undefined ? { maxCost: params.maxCost } : {}),
 			});
 			if (baseline) {
 				// Clone-on-spawn: attach to the pinned baseline, duplicate the branch

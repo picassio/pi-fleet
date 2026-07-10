@@ -82,6 +82,7 @@ export class AgentClient {
 		bundleHash?: string;
 		env?: Record<string, string>;
 		traceId?: string;
+		budget?: { maxCost?: number };
 	}): Promise<FrameOf<"spawned">["instance"]> {
 		const response = await this.request({
 			v: 1,
@@ -91,6 +92,7 @@ export class AgentClient {
 			...(request.bundleHash ? { bundleHash: request.bundleHash } : {}),
 			...(request.env ? { env: request.env } : {}),
 			...(request.traceId ? { traceId: request.traceId } : {}),
+			...(request.budget ? { budget: request.budget } : {}),
 		});
 		if (response.type === "spawned") return response.instance;
 		if (response.type === "spawn_error") {
