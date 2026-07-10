@@ -60,7 +60,13 @@ pi install git:github.com/picassio/pi-fleet
 
 **Server / orchestrator machine**: that's it — the extension auto-loads in every pi session (fleet tools, `/fleet-*` commands).
 
-**Worker / agent machines** (Linux/macOS) — one command:
+**Worker / agent machines — simplest: just the extension.** After `pi install`, open pi on that machine and type:
+
+```
+/fleet-agent <your-server-tailnet-name>
+```
+
+That pi session now serves as the fleet agent (workers live while the session runs). For a durable headless agent instead (Linux/macOS) — one command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/picassio/pi-fleet/main/scripts/bootstrap-agent.sh | sh -s -- --server <your-machine-tailnet-name> [--max-workers 4]
