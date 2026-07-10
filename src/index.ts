@@ -209,16 +209,32 @@ function registerServerMode(pi: ExtensionAPI): void {
 			host: Type.String({ description: "Agent tailnet IP or hostname" }),
 			cwd: Type.String({ description: "Working directory on the remote machine" }),
 			bundle: Type.Optional(Type.String({ description: "Bundle name (default: default)" })),
+			fromBaseline: Type.Optional(Type.String({ description: "Baseline label: start warm by cloning it" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
-			const tracked = await getFleet().spawn({
-				host: params.host,
-				cwd: params.cwd,
-				bundle: params.bundle ?? "default",
+			const manager = getFleet();
+			let baseline;
+			if (params.fromBaseline) {
+				baseline = (await manager.loadBaselines()).get(params.fromBaseline);
+				if (!baseline) throw new Error(`unknown baseline: ${params.fromBaseline}`);
+			}
+			const tracked = await manager.spawn({
+				host: baseline?.host ?? params.host,
+				cwd: baseline?.cwd ?? params.cwd,
+				bundle: params.bundle ?? baseline?.bundle ?? "default",
 			});
+			if (baseline) {
+				// Clone-on-spawn: attach to the pinned baseline, duplicate the branch
+				// into a NEW session file, work in the clone (baseline never written).
+				await manager.rpcRequest(tracked.instanceId, { type: "switch_session", sessionPath: baseline.sessionPath });
+				await manager.rpcRequest(tracked.instanceId, { type: "clone" });
+			}
 			updateStatus(ctx);
 			return {
-				...text(`spawned ${tracked.instanceId} on ${tracked.host} (bundle ${tracked.bundle})`),
+				...text(
+					`spawned ${tracked.instanceId} on ${tracked.host} (bundle ${tracked.bundle}` +
+						`${baseline ? `, warm from baseline ${baseline.label}` : ""})`,
+				),
 				details: { instanceId: tracked.instanceId },
 			};
 		},
@@ -396,6 +412,74 @@ function registerServerMode(pi: ExtensionAPI): void {
 					...(params.staged !== undefined ? { staged: params.staged } : {}),
 					...(params.stat !== undefined ? { stat: params.stat } : {}),
 				}),
+			);
+		},
+	});
+
+	const sessionFileFrom = (event: unknown): string | undefined => {
+		const data = (event as { data?: Record<string, unknown> }).data ?? {};
+		for (const key of ["sessionFile", "sessionPath", "file"]) {
+			if (typeof data[key] === "string") return data[key] as string;
+		}
+		return undefined;
+	};
+
+	pi.registerTool({
+		name: "remote_baseline",
+		label: "Remote Baseline",
+		description:
+			"Create a pinned warm-context baseline on a fleet machine: spawn, prime (explore the repo), " +
+			"compact, name it, record it. Later remote_spawn fromBaseline starts tasks with the repo already understood.",
+		parameters: Type.Object({
+			host: Type.String(),
+			cwd: Type.String(),
+			label: Type.String({ description: "Baseline label, e.g. api-repo" }),
+			primingPrompt: Type.Optional(Type.String()),
+			bundle: Type.Optional(Type.String()),
+		}),
+		async execute(_id, params, signal, onUpdate, ctx) {
+			const manager = getFleet();
+			const tracked = await manager.spawn({ host: params.host, cwd: params.cwd, bundle: params.bundle ?? "default" });
+			updateStatus(ctx);
+			onUpdate?.(text(`priming ${tracked.instanceId}...`));
+			await manager.prompt(
+				tracked.instanceId,
+				params.primingPrompt ??
+					"Explore this repository: read the README and any AGENTS/context files, inspect the layout, and summarize the architecture, conventions, and build/test commands. Do not modify anything.",
+			);
+			await manager.waitSettled(tracked.instanceId, 900_000, signal);
+			onUpdate?.(text("compacting..."));
+			await manager.rpcRequest(tracked.instanceId, { type: "compact" }, 300_000);
+			await manager.rpcRequest(tracked.instanceId, { type: "set_session_name", name: `baseline:${params.label}` });
+			const state = await manager.rpcRequest(tracked.instanceId, { type: "get_state" });
+			const sessionPath = sessionFileFrom(state);
+			await manager.stop(tracked.instanceId);
+			updateStatus(ctx);
+			if (!sessionPath) throw new Error("could not determine the baseline session file from get_state");
+			await manager.saveBaseline({
+				label: params.label,
+				host: params.host,
+				cwd: params.cwd,
+				sessionPath,
+				bundle: params.bundle ?? "default",
+				createdAt: Date.now(),
+			});
+			return text(`baseline "${params.label}" recorded (${sessionPath} on ${params.host})`);
+		},
+	});
+
+	pi.registerTool({
+		name: "fleet_baselines",
+		label: "Fleet Baselines",
+		description: "List recorded warm-context baselines.",
+		parameters: Type.Object({}),
+		async execute() {
+			const baselines = [...(await getFleet().loadBaselines()).values()];
+			if (baselines.length === 0) return text("no baselines");
+			return text(
+				baselines
+					.map((entry) => `${entry.label}: ${entry.host} ${entry.cwd} (bundle ${entry.bundle}, ${entry.sessionPath})`)
+					.join("\n"),
 			);
 		},
 	});

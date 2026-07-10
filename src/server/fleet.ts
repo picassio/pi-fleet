@@ -5,6 +5,8 @@
  * streams, detects settle points (`agent_settled`), and captures the last
  * assistant message so blocking prompts can return the worker's result.
  */
+import { randomBytes } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AgentClient } from "./agent-client.ts";
@@ -55,6 +57,9 @@ export class FleetManager {
 	private registry: RunningRegistryServer | undefined;
 	private readonly seenTaskDone = new Set<string>();
 	private readonly reconnectTimers = new Map<string, NodeJS.Timeout>();
+	private readonly rpcWaiters = new Map<string, (event: PiEvent) => void>();
+	private baselines = new Map<string, BaselineRecord>();
+	private baselinesLoaded = false;
 	private closed = false;
 	private readonly options: FleetManagerOptions;
 	readonly registryRoot: string;
@@ -168,6 +173,56 @@ export class FleetManager {
 		return tracked;
 	}
 
+	/** Send a pi RPC command and await its correlated response event. */
+	async rpcRequest(
+		instanceId: string,
+		command: Record<string, unknown>,
+		timeoutMs = 60_000,
+	): Promise<PiEvent> {
+		const tracked = this.mustGet(instanceId);
+		const client = await this.agent(tracked.host);
+		const id = `rpc-${randomBytes(5).toString("hex")}`;
+		return new Promise((resolvePromise, rejectPromise) => {
+			const timer = setTimeout(() => {
+				this.rpcWaiters.delete(id);
+				rejectPromise(new Error(`rpc ${String(command.type)} timed out after ${timeoutMs}ms`));
+			}, timeoutMs);
+			timer.unref?.();
+			this.rpcWaiters.set(id, (event) => {
+				clearTimeout(timer);
+				this.rpcWaiters.delete(id);
+				resolvePromise(event);
+			});
+			client.rpc(instanceId, { ...command, id });
+		});
+	}
+
+	// --- Baselines (Phase 3.5) ---------------------------------------------
+
+	private get baselinesPath(): string {
+		return join(this.registryRoot, "..", "baselines.json");
+	}
+
+	async loadBaselines(): Promise<Map<string, BaselineRecord>> {
+		if (!this.baselinesLoaded) {
+			try {
+				const raw = JSON.parse(await readFile(this.baselinesPath, "utf8")) as BaselineRecord[];
+				this.baselines = new Map(raw.map((entry) => [entry.label, entry]));
+			} catch {
+				this.baselines = new Map();
+			}
+			this.baselinesLoaded = true;
+		}
+		return this.baselines;
+	}
+
+	async saveBaseline(record: BaselineRecord): Promise<void> {
+		await this.loadBaselines();
+		this.baselines.set(record.label, record);
+		await mkdir(join(this.baselinesPath, ".."), { recursive: true });
+		await writeFile(this.baselinesPath, JSON.stringify([...this.baselines.values()], null, "\t"), "utf8");
+	}
+
 	/** Send a prompt; resets the settle latch. taskId makes it a durable tracked task. */
 	async prompt(instanceId: string, message: string, taskId?: string): Promise<void> {
 		const tracked = this.mustGet(instanceId);
@@ -270,6 +325,8 @@ export class FleetManager {
 	}
 
 	private handleEvent(instanceId: string, event: PiEvent): void {
+		const eventId = (event as { id?: unknown }).id;
+		if (typeof eventId === "string") this.rpcWaiters.get(eventId)?.(event);
 		const tracked = this.instances.get(instanceId);
 		if (!tracked) return;
 		tracked.events.push(event);
@@ -292,4 +349,13 @@ export class FleetManager {
 			if (waiters.length === 0) this.options.onSettled?.(tracked);
 		}
 	}
+}
+
+export interface BaselineRecord {
+	label: string;
+	host: string;
+	cwd: string;
+	sessionPath: string;
+	bundle: string;
+	createdAt: number;
 }
