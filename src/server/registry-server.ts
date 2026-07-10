@@ -24,8 +24,10 @@ export interface RegistryServerOptions {
 	/** Interface to bind — the tailscale IP in production, 127.0.0.1 in tests. */
 	host: string;
 	port: number;
-	/** Optional connection observer (used for whois logging/gating later). */
+	/** Optional connection observer (logging). */
 	onRequest?: (info: { remoteAddress: string; method: string; url: string }) => void;
+	/** Optional gate: return false to refuse (403). Failing gates deny. */
+	allow?: (remoteAddress: string) => Promise<boolean>;
 }
 
 export interface RunningRegistryServer {
@@ -41,10 +43,10 @@ const BUNDLE_NAME_PATTERN = /^[a-z0-9][a-z0-9-_.]*$/i;
 export async function startRegistryServer(
 	options: RegistryServerOptions,
 ): Promise<RunningRegistryServer> {
-	const { root, host, port, onRequest } = options;
+	const { root, host, port, onRequest, allow } = options;
 
 	const server = createServer((request, response) => {
-		void handle(root, request, response, onRequest).catch(() => {
+		void handleGated(root, request, response, onRequest, allow).catch(() => {
 			if (!response.headersSent) response.writeHead(500);
 			response.end();
 		});
@@ -70,6 +72,30 @@ export async function startRegistryServer(
 				server.close((error) => (error ? rejectPromise(error) : resolvePromise()));
 			}),
 	};
+}
+
+async function handleGated(
+	root: string,
+	request: IncomingMessage,
+	response: ServerResponse,
+	onRequest: RegistryServerOptions["onRequest"],
+	allow: RegistryServerOptions["allow"],
+): Promise<void> {
+	if (allow) {
+		const ip = (request.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
+		let ok = false;
+		try {
+			ok = await allow(ip);
+		} catch {
+			ok = false;
+		}
+		if (!ok) {
+			response.writeHead(403, { "content-type": "application/json" });
+			response.end(JSON.stringify({ error: "forbidden" }));
+			return;
+		}
+	}
+	return handle(root, request, response, onRequest);
 }
 
 async function handle(

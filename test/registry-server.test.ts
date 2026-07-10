@@ -86,3 +86,26 @@ describe("registry server + HttpRegistry client", () => {
 		expect(result.fetched).toEqual(["skills/greet/SKILL.md"]);
 	});
 });
+
+describe("gap fix: registry gate", () => {
+	it("refuses ungated peers with 403 and allows gated ones", async () => {
+		const registryRoot2 = await mkdtemp(join(tmpdir(), "pf-gate-reg-"));
+		const source = await mkdtemp(join(tmpdir(), "pf-gate-src-"));
+		await writeFile(join(source, "a.txt"), "x", "utf8");
+		await publishBundle({ sourceDir: source, registryRoot: registryRoot2, meta: { name: "default" } });
+		let allowNext = false;
+		const gated = await startRegistryServer({
+			root: registryRoot2,
+			host: "127.0.0.1",
+			port: 0,
+			allow: async () => allowNext,
+		});
+		try {
+			expect((await fetch(`${gated.url}/healthz`)).status).toBe(403);
+			allowNext = true;
+			expect((await fetch(`${gated.url}/healthz`)).status).toBe(200);
+		} finally {
+			await gated.close();
+		}
+	});
+});

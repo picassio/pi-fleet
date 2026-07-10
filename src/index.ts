@@ -306,6 +306,7 @@ function registerServerMode(pi: ExtensionAPI): void {
 			}
 			const tailscale = new Tailscale();
 			const host = await tailscale.ip4();
+			try {
 			agentRunning = await startAgentDaemon({
 				host,
 				port: AGENT_DEFAULT_PORT,
@@ -316,9 +317,20 @@ function registerServerMode(pi: ExtensionAPI): void {
 			if (ctx.hasUI) {
 				ctx.ui.setStatus("fleet-agent", `agent: ${host}:${agentRunning.port} pinned ${pinnedServer}`);
 				ctx.ui.notify(
-					`fleet-agent serving on ${host}:${agentRunning.port} (pinned to ${pinnedServer}). Workers live while this pi session runs; use the bootstrap script for a durable service.`,
+					`fleet-agent serving on ${host}:${agentRunning.port} (pinned to ${pinnedServer}). Workers live while this pi session runs; use /fleet-service for a durable agent.`,
 					"info",
 				);
+			}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				if (ctx.hasUI) {
+					ctx.ui.notify(
+						message.includes("EADDRINUSE")
+							? `port ${AGENT_DEFAULT_PORT} already in use — is /fleet-service or another agent running on this machine?`
+							: `fleet-agent failed: ${message}`,
+						"error",
+					);
+				}
 			}
 		},
 	});
@@ -641,6 +653,9 @@ function registerServerMode(pi: ExtensionAPI): void {
 			const manager = getFleet();
 			const tracked = await manager.spawn({ host: params.host, cwd: params.cwd, bundle: params.bundle ?? "default" });
 			updateStatus(ctx);
+			let sessionPath: string | undefined;
+			let gitHead: string | undefined;
+			try {
 			onUpdate?.(text(`priming ${tracked.instanceId}...`));
 			await manager.prompt(
 				tracked.instanceId,
@@ -652,16 +667,18 @@ function registerServerMode(pi: ExtensionAPI): void {
 			await manager.rpcRequest(tracked.instanceId, { type: "compact" }, 300_000);
 			await manager.rpcRequest(tracked.instanceId, { type: "set_session_name", name: `baseline:${params.label}` });
 			const state = await manager.rpcRequest(tracked.instanceId, { type: "get_state" });
-			const sessionPath = sessionFileFrom(state);
-			let gitHead: string | undefined;
+			sessionPath = sessionFileFrom(state);
 			try {
 				const head = await manager.fs(tracked.instanceId, { type: "fs_diff", revParse: true });
 				gitHead = head.text?.trim() || undefined;
 			} catch {
 				// not a git repo: staleness tracking unavailable
 			}
-			await manager.stop(tracked.instanceId);
-			updateStatus(ctx);
+			} finally {
+				// Never leak a primed-but-failed worker (gap fix).
+				await manager.stop(tracked.instanceId).catch(() => {});
+				updateStatus(ctx);
+			}
 			if (!sessionPath) throw new Error("could not determine the baseline session file from get_state");
 			await manager.saveBaseline({
 				label: params.label,

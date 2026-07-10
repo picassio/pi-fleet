@@ -141,6 +141,14 @@ export class FleetManager {
 				root: this.registryRoot,
 				host,
 				port: this.options.registryPort ?? 9787,
+				allow: async (ip) => {
+					try {
+						await tailscale.whois(ip);
+						return true;
+					} catch {
+						return false;
+					}
+				},
 			});
 		}
 		return this.registry.url;

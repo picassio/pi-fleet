@@ -57,6 +57,22 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 	);
 	/** instanceId → pending taskId (set by rpc prompt frames carrying taskId). */
 	const pendingTasks = new Map<string, string>();
+	const emitTaskDone = (instanceId: string, taskId: string, status: "settled" | "budget_exceeded" | "aborted") => {
+		const frame = {
+			v: 1 as const,
+			type: "task_done" as const,
+			taskId,
+			instanceId,
+			seq: Date.now(),
+			status,
+			summary: (lastAssistant.get(instanceId) ?? "(no assistant output)").slice(0, 2_000),
+			...(lastAssistant.get(instanceId) ? { lastAssistantMessage: lastAssistant.get(instanceId) as string } : {}),
+		};
+		void outbox.put(frame).then(() => {
+			for (const connection of connections) connection.trySend(frame);
+			log(`task_done ${taskId} (${status}) persisted + broadcast`);
+		});
+	};
 	const lastAssistant = new Map<string, string>();
 	const budgets = new Map<string, number>(); // instanceId -> maxCost
 	const costs = new Map<string, number>(); // instanceId -> accumulated cost
@@ -95,28 +111,19 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 				const taskId = pendingTasks.get(instanceId);
 				if (taskId !== undefined) {
 					pendingTasks.delete(instanceId);
-					const frame = {
-						v: 1 as const,
-						type: "task_done" as const,
-						taskId,
-						instanceId,
-						seq: Date.now(),
-						status: budgetExceeded.has(instanceId) ? ("budget_exceeded" as const) : ("settled" as const),
-						summary: (lastAssistant.get(instanceId) ?? "(no assistant output)").slice(0, 2_000),
-						...(lastAssistant.get(instanceId)
-							? { lastAssistantMessage: lastAssistant.get(instanceId) as string }
-							: {}),
-					};
-					void outbox.put(frame).then(() => {
-						for (const connection of connections) connection.trySend(frame);
-						log(`task_done ${taskId} persisted + broadcast`);
-					});
+					emitTaskDone(instanceId, taskId, budgetExceeded.has(instanceId) ? "budget_exceeded" : "settled");
 				}
 			}
 		},
 		onExit: (instanceId, code) => {
 			options.supervisor?.onExit?.(instanceId, code);
 			log(`instance ${instanceId} exited (${code})`);
+			// Crash mid-task: never leave the orchestrator waiting (gap fix).
+			const taskId = pendingTasks.get(instanceId);
+			if (taskId !== undefined) {
+				pendingTasks.delete(instanceId);
+				emitTaskDone(instanceId, taskId, "aborted");
+			}
 		},
 	});
 

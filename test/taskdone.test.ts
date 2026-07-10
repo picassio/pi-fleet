@@ -192,3 +192,35 @@ setInterval(() => {}, 1000);
 		expect(received[0]?.status).toBe("budget_exceeded");
 	});
 });
+
+describe("gap fix: worker crash mid-task", () => {
+	it("emits task_done aborted so the orchestrator is never left waiting", async () => {
+		const outboxDir = await mkdtemp(join(tmpdir(), "pf-outbox-"));
+		const dir = await mkdtemp(join(tmpdir(), "pf-crash-worker-"));
+		const workerPath = join(dir, "worker.mjs");
+		await writeFile(
+			workerPath,
+			`
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", () => setTimeout(() => process.exit(1), 60)); // crash on any command
+setInterval(() => {}, 1000);
+`,
+			"utf8",
+		);
+		running = await startAgentDaemon({
+			host: "127.0.0.1",
+			port: 0,
+			machine: "buildbox",
+			pinnedServer: "claude3-10",
+			whois: async () => ({ machine: "claude3-10", user: "ana@github" }),
+			outboxDir,
+			supervisor: { resolveCommand: async () => ({ command: process.execPath, args: [workerPath] }) },
+		});
+		const received: Array<{ taskId: string; status?: string }> = [];
+		const manager = makeManager(running.port, (frame) => received.push(frame as { taskId: string; status?: string }));
+		const tracked = await manager.spawn({ host: "127.0.0.1", cwd: tmpdir(), bundle: "default" });
+		await manager.prompt(tracked.instanceId, "doomed", "t-crash");
+		await poll(() => received.length === 1, 10_000);
+		expect(received[0]?.status).toBe("aborted");
+	});
+});
