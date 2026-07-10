@@ -129,6 +129,8 @@ const frameSchemas = {
 		type: Type.Literal("rpc"),
 		instanceId: Type.String(),
 		command: Type.Unknown(),
+		/** When set on a prompt command, the agent tracks it as a task and emits a durable task_done on settle. */
+		taskId: Type.Optional(Type.String()),
 	}),
 	event: Type.Object({
 		...base,

@@ -13,11 +13,13 @@ export interface AgentClientOptions extends FrameConnectionOptions {
 }
 
 export type AgentEventHandler = (instanceId: string, event: unknown) => void;
+export type TaskDoneHandler = (frame: FrameOf<"task_done">) => void;
 
 export class AgentClient {
 	private connection: FrameConnection;
 	private readonly pending = new Map<string, { resolve: (frame: Frame) => void; reject: (error: Error) => void }>();
 	private eventHandler: AgentEventHandler | undefined;
+	private taskDoneHandler: TaskDoneHandler | undefined;
 	private helloFrame: FrameOf<"hello"> | undefined;
 	private helloWaiters: Array<(hello: FrameOf<"hello">) => void> = [];
 
@@ -67,6 +69,11 @@ export class AgentClient {
 
 	onEvent(handler: AgentEventHandler): void {
 		this.eventHandler = handler;
+	}
+
+	/** task_done frames are auto-acked after the handler runs (at-least-once + ack). */
+	onTaskDone(handler: TaskDoneHandler): void {
+		this.taskDoneHandler = handler;
 	}
 
 	async spawn(request: {
@@ -119,8 +126,14 @@ export class AgentClient {
 	}
 
 	/** Fire-and-forget pi RPC command to a worker; replies arrive as events. */
-	rpc(instanceId: string, command: unknown): void {
-		this.connection.send({ v: 1, type: "rpc", instanceId, command });
+	rpc(instanceId: string, command: unknown, taskId?: string): void {
+		this.connection.send({
+			v: 1,
+			type: "rpc",
+			instanceId,
+			command,
+			...(taskId ? { taskId } : {}),
+		});
 	}
 
 	close(): void {
@@ -154,6 +167,11 @@ export class AgentClient {
 		}
 		if (frame.type === "event") {
 			this.eventHandler?.(frame.instanceId, frame.event);
+			return;
+		}
+		if (frame.type === "task_done") {
+			this.taskDoneHandler?.(frame);
+			this.connection.trySend({ v: 1, type: "task_done_ack", taskId: frame.taskId, seq: frame.seq });
 			return;
 		}
 		if (frame.id && this.pending.has(frame.id)) {

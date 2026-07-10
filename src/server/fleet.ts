@@ -26,6 +26,7 @@ export interface TrackedInstance {
 	cwd: string;
 	bundle: string;
 	state: "running" | "stopped" | "exited";
+	review: "none" | "awaiting";
 	settled: boolean;
 	lastAssistant: string | undefined;
 	events: PiEvent[];
@@ -39,6 +40,8 @@ export interface FleetManagerOptions {
 	registryUrl?: string;
 	/** Fired whenever a tracked instance reaches agent_settled. */
 	onSettled?: (instance: TrackedInstance) => void;
+	/** Fired once per unique durable task_done (deduped by instanceId+taskId+seq). */
+	onTaskDone?: (frame: { taskId: string; instanceId: string; seq: number; summary: string }) => void;
 }
 
 export class FleetManager {
@@ -46,6 +49,7 @@ export class FleetManager {
 	private readonly instances = new Map<string, TrackedInstance>();
 	private readonly settleWaiters = new Map<string, Array<() => void>>();
 	private registry: RunningRegistryServer | undefined;
+	private readonly seenTaskDone = new Set<string>();
 	private readonly options: FleetManagerOptions;
 	readonly registryRoot: string;
 
@@ -65,6 +69,14 @@ export class FleetManager {
 			: await AgentClient.connect(host, port);
 		await client.hello();
 		client.onEvent((instanceId, event) => this.handleEvent(instanceId, event as PiEvent));
+		client.onTaskDone((frame) => {
+			const key = `${frame.instanceId}:${frame.taskId}:${frame.seq}`;
+			if (this.seenTaskDone.has(key)) return;
+			this.seenTaskDone.add(key);
+			const tracked = this.instances.get(frame.instanceId);
+			if (tracked) tracked.review = "awaiting";
+			this.options.onTaskDone?.(frame);
+		});
 		this.agents.set(host, client);
 		return client;
 	}
@@ -104,6 +116,7 @@ export class FleetManager {
 			cwd: request.cwd,
 			bundle: request.bundle,
 			state: "running",
+			review: "none",
 			settled: false,
 			lastAssistant: undefined,
 			events: [],
@@ -112,12 +125,13 @@ export class FleetManager {
 		return tracked;
 	}
 
-	/** Send a prompt; resets the settle latch. */
-	async prompt(instanceId: string, message: string): Promise<void> {
+	/** Send a prompt; resets the settle latch. taskId makes it a durable tracked task. */
+	async prompt(instanceId: string, message: string, taskId?: string): Promise<void> {
 		const tracked = this.mustGet(instanceId);
 		const client = await this.agent(tracked.host);
 		tracked.settled = false;
-		client.rpc(instanceId, { type: "prompt", message });
+		tracked.review = "none";
+		client.rpc(instanceId, { type: "prompt", message }, taskId);
 	}
 
 	/** Resolve when the worker settles (agent_settled) or reject on timeout/abort. */

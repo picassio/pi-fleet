@@ -113,6 +113,19 @@ function registerServerMode(pi: ExtensionAPI): void {
 		// the injected message triggers a review turn if pi is idle (docs/plan.md
 		// "Task completion & verification" step 3).
 		fleet ??= new FleetManager({
+			onTaskDone: (frame) => {
+				pi.sendMessage(
+					{
+						customType: "fleet-task-done",
+						content:
+							`Fleet task ${frame.taskId} (worker ${frame.instanceId}) completed durably.\n` +
+							`Summary: ${frame.summary}\n` +
+							"Verify with remote_diff/remote_output, then remote_accept or remote_reject.",
+						display: true,
+					},
+					{ triggerTurn: true, deliverAs: "followUp" },
+				);
+			},
 			onSettled: (instance) => {
 				pi.sendMessage(
 					{
@@ -203,8 +216,12 @@ function registerServerMode(pi: ExtensionAPI): void {
 		}),
 		async execute(_id, params, signal, onUpdate) {
 			const manager = getFleet();
+			if (params.wait === false) {
+				const taskId = `t-${Date.now().toString(36)}`;
+				await manager.prompt(params.instanceId, params.message, taskId);
+				return text(`task ${taskId} sent to ${params.instanceId}; you will be notified on durable task_done`);
+			}
 			await manager.prompt(params.instanceId, params.message);
-			if (params.wait === false) return text(`prompt sent to ${params.instanceId} (not waiting)`);
 			onUpdate?.(text("worker running..."));
 			await manager.waitSettled(params.instanceId, (params.timeoutSeconds ?? 600) * 1000, signal);
 			const result = manager.get(params.instanceId)?.lastAssistant ?? "(no assistant output captured)";
@@ -357,6 +374,41 @@ function registerServerMode(pi: ExtensionAPI): void {
 					...(params.stat !== undefined ? { stat: params.stat } : {}),
 				}),
 			);
+		},
+	});
+
+	pi.registerTool({
+		name: "remote_accept",
+		label: "Remote Accept",
+		description: "Accept a fleet worker's completed task: disposition stop (default) or keep_idle.",
+		parameters: Type.Object({
+			instanceId: Type.String(),
+			disposition: Type.Optional(Type.String({ description: "stop | keep_idle" })),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			const manager = getFleet();
+			const tracked = manager.get(params.instanceId);
+			if (tracked) tracked.review = "none";
+			if ((params.disposition ?? "stop") === "stop") {
+				const result = await manager.stop(params.instanceId);
+				updateStatus(ctx);
+				return text(`accepted; worker stopped${result.forced ? " (forced)" : ""}`);
+			}
+			return text("accepted; worker kept idle for further tasks");
+		},
+	});
+
+	pi.registerTool({
+		name: "remote_reject",
+		label: "Remote Reject",
+		description:
+			"Reject a fleet worker's completed task with revision feedback; the feedback is delivered " +
+			"to the same worker session (context intact) as a new tracked task.",
+		parameters: Type.Object({ instanceId: Type.String(), feedback: Type.String() }),
+		async execute(_id, params) {
+			const taskId = `t-${Date.now().toString(36)}`;
+			await getFleet().prompt(params.instanceId, `Revision requested: ${params.feedback}`, taskId);
+			return text(`rejected; revision task ${taskId} sent to the same session`);
 		},
 	});
 

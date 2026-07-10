@@ -10,8 +10,11 @@ import { createServer, type Server, type Socket } from "node:net";
 import { FrameConnection } from "../core/connection.ts";
 import type { Frame, FrameOf } from "../core/frames.ts";
 import type { TailscaleIdentity } from "../core/tailscale.ts";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { InstanceSupervisor, type SupervisorOptions } from "./instances.ts";
 import { fsDiff, fsGrep, fsList, fsRead } from "./fsservice.ts";
+import { TaskOutbox } from "./outbox.ts";
 
 export const AGENT_DEFAULT_PORT = 9788;
 export const PACKAGE_VERSION = "0.0.1";
@@ -24,6 +27,8 @@ export interface AgentDaemonOptions {
 	pinnedServer: string;
 	whois: (ip: string) => Promise<TailscaleIdentity>;
 	supervisor?: SupervisorOptions;
+	/** Outbox directory (default ~/.pi/agent/fleet-agent/outbox). */
+	outboxDir?: string;
 	heartbeatIntervalMs?: number;
 	heartbeatTimeoutMs?: number;
 	log?: (line: string) => void;
@@ -40,6 +45,12 @@ export interface RunningAgent {
 export async function startAgentDaemon(options: AgentDaemonOptions): Promise<RunningAgent> {
 	const log = options.log ?? (() => {});
 	const connections = new Set<FrameConnection>();
+	const outbox = new TaskOutbox(
+		options.outboxDir ?? join(homedir(), ".pi", "agent", "fleet-agent", "outbox"),
+	);
+	/** instanceId → pending taskId (set by rpc prompt frames carrying taskId). */
+	const pendingTasks = new Map<string, string>();
+	const lastAssistant = new Map<string, string>();
 
 	const supervisor = new InstanceSupervisor({
 		...options.supervisor,
@@ -47,6 +58,39 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 			options.supervisor?.onEvent?.(instanceId, event);
 			for (const connection of connections) {
 				connection.trySend({ v: 1, type: "event", instanceId, event });
+			}
+			const typed = event as {
+				type?: string;
+				message?: { role?: string; content?: Array<{ type?: string; text?: string }> };
+			};
+			if (typed.type === "message_end" && typed.message?.role === "assistant") {
+				const textParts = (typed.message.content ?? [])
+					.filter((part) => part.type === "text" && typeof part.text === "string")
+					.map((part) => part.text)
+					.join("\n");
+				if (textParts) lastAssistant.set(instanceId, textParts);
+			}
+			if (typed.type === "agent_settled") {
+				const taskId = pendingTasks.get(instanceId);
+				if (taskId !== undefined) {
+					pendingTasks.delete(instanceId);
+					const frame = {
+						v: 1 as const,
+						type: "task_done" as const,
+						taskId,
+						instanceId,
+						seq: Date.now(),
+						status: "settled" as const,
+						summary: (lastAssistant.get(instanceId) ?? "(no assistant output)").slice(0, 2_000),
+						...(lastAssistant.get(instanceId)
+							? { lastAssistantMessage: lastAssistant.get(instanceId) as string }
+							: {}),
+					};
+					void outbox.put(frame).then(() => {
+						for (const connection of connections) connection.trySend(frame);
+						log(`task_done ${taskId} persisted + broadcast`);
+					});
+				}
 			}
 		},
 		onExit: (instanceId, code) => {
@@ -56,7 +100,7 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 	});
 
 	const server = createServer((socket) => {
-		void handleConnection(socket, options, supervisor, connections, log).catch((error) => {
+		void handleConnection(socket, options, supervisor, connections, log, outbox, pendingTasks).catch((error) => {
 			log(`connection error: ${error instanceof Error ? error.message : String(error)}`);
 			socket.destroy();
 		});
@@ -92,6 +136,8 @@ async function handleConnection(
 	supervisor: InstanceSupervisor,
 	connections: Set<FrameConnection>,
 	log: (line: string) => void,
+	outbox: TaskOutbox,
+	pendingTasks: Map<string, string>,
 ): Promise<void> {
 	const ip = (socket.remoteAddress ?? "").replace(/^::ffff:/, "");
 
@@ -131,7 +177,19 @@ async function handleConnection(
 		platform: process.platform,
 	});
 
+	// Replay unacked task_done entries to the newly connected server (AC-3.5/3.6).
+	for (const pending of await outbox.pending()) {
+		connection.trySend(pending);
+	}
+
 	connection.onFrame((frame) => {
+		if (frame.type === "task_done_ack") {
+			void outbox.ack(frame.taskId, frame.seq);
+			return;
+		}
+		if (frame.type === "rpc" && frame.taskId) {
+			pendingTasks.set(frame.instanceId, frame.taskId);
+		}
 		void dispatch(frame, connection, supervisor).catch((error) => {
 			connection.trySend({
 				v: 1,
