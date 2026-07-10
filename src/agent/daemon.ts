@@ -206,12 +206,9 @@ async function handleConnection(
 	}
 
 	// Session registry push: agent disk is the source of truth (AC-3.5.4).
-	connection.trySend({
-		v: 1,
-		type: "sessions_report",
-		machine: options.machine,
-		full: true,
-		sessions: await listSessions(options.sessionsDir),
+	// Async so a large session store never delays frame handling.
+	void listSessions(options.sessionsDir).then((sessions) => {
+		connection.trySend({ v: 1, type: "sessions_report", machine: options.machine, full: true, sessions });
 	});
 
 	connection.onFrame((frame) => {

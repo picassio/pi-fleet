@@ -2,7 +2,7 @@
  * Agent-side pi session search (AC-3.5.5): greps JSONL session files locally;
  * only matching refs + snippets cross the wire.
  */
-import { readdir, readFile, stat } from "node:fs/promises";
+import { open, readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
@@ -80,7 +80,15 @@ export async function listSessions(root: string | undefined): Promise<SessionLis
 			} else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
 				try {
 					const info = await stat(full);
-					const firstLine = (await readFile(full, "utf8")).split("\n", 1)[0] ?? "";
+					const handle = await open(full, "r");
+					let head: string;
+					try {
+						const { buffer, bytesRead } = await handle.read(Buffer.alloc(4096), 0, 4096, 0);
+						head = buffer.subarray(0, bytesRead).toString("utf8");
+					} finally {
+						await handle.close();
+					}
+					const firstLine = head.split("\n", 1)[0] ?? "";
 					const header = JSON.parse(firstLine) as { cwd?: string; name?: string };
 					const name = typeof header.name === "string" ? header.name : undefined;
 					sessions.push({
