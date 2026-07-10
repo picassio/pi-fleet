@@ -15,7 +15,16 @@ stateDiagram-v2
     provisioning --> failed : sync failed, no cache / path-safety violation
     degraded_cache --> idle
     idle --> running       : prompt / steer delivered
-    running --> idle       : agent_settled
+    running --> awaiting_review : agent_settled on a tracked task (task_done sent)
+    awaiting_review --> verifying : server LLM begins review
+    verifying --> accepted  : task_accept
+    verifying --> revising  : task_reject {feedback}
+    revising --> running    : feedback delivered as new prompt (same session)
+    verifying --> escalated : maxRejects exceeded → notify human
+    escalated --> verifying : human weighs in
+    accepted --> idle       : disposition keep_idle
+    accepted --> stopping   : disposition stop
+    running --> idle        : agent_settled (untracked / ad-hoc prompt)
     running --> aborting   : remote_abort
     aborting --> idle      : abort confirmed
     idle --> stopping      : remote_stop / stop frame
@@ -33,6 +42,7 @@ stateDiagram-v2
 ```
 
 Notes:
+- `awaiting_review` keeps the worker process alive with its context intact, so `task_reject` revisions are cheap (no respawn, no re-provisioning).
 - `unreachable` is a **server-side view state**: the worker itself keeps running under its agent. Reconciliation on reconnect trusts the agent's `instances` report.
 - `degraded_cache` is surfaced in `fleet_status` and the widget; it clears on the next successful sync.
 
@@ -147,7 +157,46 @@ sequenceDiagram
     Note over S: remote_output serves buffered tail + snapshot
 ```
 
-## 7. Runtime rebundle (`/fleet-use`, AC-4.1)
+## 7. Sequence: task completion, ack, and verification
+
+```mermaid
+sequenceDiagram
+    participant W as worker pi
+    participant A as fleet agent
+    participant O as agent outbox (disk)
+    participant S as server pi (orchestrator LLM)
+    participant U as Ana
+
+    W-->>A: agent_settled (tracked taskId)
+    A->>O: persist task_done {taskId, seq, summary, stats}
+    A->>S: task_done
+    alt server reachable
+        S-->>A: task_done_ack
+        A->>O: delete outbox entry
+    else server offline / asleep
+        Note over A,O: retry with backoff; replay on reconnect
+        A->>S: task_done (replayed)
+        S-->>A: task_done_ack (deduped by taskId+seq)
+    end
+    S->>S: sendMessage(fleet-task-done, triggerTurn: true)
+    Note over S: worker state → awaiting_review
+    S->>S: LLM wakes, reviews
+    S->>A: rpc {instanceId, prompt: "run tests, show git diff --stat"}
+    A->>W: JSONL stdin
+    W-->>S: evidence (via event frames)
+    alt work verified
+        S->>A: task_accept {disposition}
+        S-->>U: notify + widget: accepted
+    else needs revision
+        S->>A: task_reject {feedback}
+        A->>W: feedback as new prompt (same session, context intact)
+        Note over W: running again → next agent_settled starts a new review cycle
+    else maxRejects exceeded
+        S-->>U: notify: escalated, human review needed
+    end
+```
+
+## 8. Runtime rebundle (`/fleet-use`, AC-4.1)
 
 ```mermaid
 stateDiagram-v2

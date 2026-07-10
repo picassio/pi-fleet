@@ -54,7 +54,13 @@ Grouped by phase (see [roadmap](roadmap.md)). Each criterion is testable; unit/i
 
 **AC-3.4 Widget accuracy.** The fleet widget reflects worker state transitions (spawning → provisioning → idle → running → settled) within 2 s of the underlying event.
 
-**AC-3.5 Orchestrator restart.** Restarting the server pi while a worker runs: after restart and `/serve`, `fleet_status` re-lists the worker and `remote_output` returns its buffered/settled output via snapshot catch-up.
+**AC-3.5 Durable completion.** With the server pi stopped, a worker finishing its task causes the agent to persist `task_done` in the outbox; after the server restarts and reconnects, the notification is delivered exactly once (duplicates deduped by `taskId`+`seq`) and the orchestrator LLM is woken via the injected `fleet-task-done` message.
+
+**AC-3.6 Ack contract.** `task_done` entries remain in the agent outbox across agent restarts until `task_done_ack` is received; after ack, the entry is gone and is never re-sent.
+
+**AC-3.7 Verification loop.** On `task_done`, the worker parks in `awaiting_review` with its process alive; `remote_reject(feedback)` delivers the feedback to the same session (history preserved) and returns it to `running`; `remote_accept` with `disposition: "stop"` gracefully stops it. Exceeding `maxRejects` (default 3) moves the task to `escalated` and notifies the user instead of re-prompting.
+
+**AC-3.8 Orchestrator restart.** Restarting the server pi while a worker runs: after restart and `/serve`, `fleet_status` re-lists the worker and `remote_output` returns its buffered/settled output via snapshot catch-up.
 
 ## Phase 4 — Runtime control
 

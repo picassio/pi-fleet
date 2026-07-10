@@ -57,6 +57,10 @@ Control plane (server ⇄ agent):
 | `rpc` | s→a | envelope: `{ instanceId, command }` → forwarded to child stdin |
 | `event` | a→s | envelope: `{ instanceId, event }` ← child stdout events |
 | `heartbeat` | both | liveness, 15s interval, 45s timeout |
+| `task_done` | a→s | durable completion notification: `{ taskId, instanceId, seq, summary, lastAssistantMessage, stats }` |
+| `task_done_ack` | s→a | ack; agent removes the outbox entry |
+| `task_accept` | s→a | verdict after verification: `{ taskId, disposition: "stop" \| "keep_idle" }` |
+| `task_reject` | s→a | verdict with revision feedback: `{ taskId, feedback }` → delivered to the same worker session as a new prompt |
 
 Worker RPC payloads inside `rpc`/`event` are pi's native RPC commands/events — pi-fleet does not invent a second session protocol.
 
@@ -65,6 +69,16 @@ Bundle registry (HTTP on the same listener):
 - `GET /v1/bundles/<name>/manifest` → manifest.json
 - `GET /v1/bundles/<name>/file?path=<posix-path>&hash=<sha256>` → file bytes
 - `GET /healthz`
+
+## Task completion & verification
+
+Raw RPC events are the live view; task completion is an explicit, reliable layer on top:
+
+1. **Completion detection.** The agent watches each worker's event stream. `agent_settled` after a tracked `remote_prompt` closes the task and produces a `task_done` frame with a result digest (final assistant message, turn/tool counts, files changed).
+2. **At-least-once delivery.** The agent persists `task_done` in a disk-backed outbox (`~/.pi/agent/fleet-agent/outbox/`), retries with backoff until `task_done_ack`, and replays unacked entries on reconnect. The server dedupes by `(instanceId, taskId, seq)`, so duplicates are harmless. Notifications survive server restarts, sleeping laptops, and agent restarts.
+3. **Waking the orchestrator.** On `task_done` the server extension injects a `fleet-task-done` custom message into the server pi session with `{ triggerTurn: true, deliverAs: "followUp" }`. If the server pi is idle, the orchestrator LLM wakes and reviews autonomously; if busy, review queues as a follow-up. The widget and a `ctx.ui.notify` update fire regardless.
+4. **Verification.** The worker parks in `awaiting_review` (process alive, context intact). The server LLM verifies using existing tools: `remote_output` for the transcript, `remote_prompt` to demand evidence (run tests, show `git diff --stat`). It then calls `remote_accept` or `remote_reject(feedback)` tools, which emit the verdict frames.
+5. **Revision loop.** `task_reject` feedback is delivered to the same worker session as a new prompt — no context loss. The loop is capped (`maxRejects`, default 3); exceeding it moves the task to `escalated`, which notifies the human instead of consuming more tokens.
 
 ## Bundle manifest (v1)
 
