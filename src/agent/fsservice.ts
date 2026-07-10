@@ -12,7 +12,8 @@ import type { FrameOf } from "../core/frames.ts";
 
 const MAX_TEXT_BYTES = 50 * 1024;
 const MAX_TEXT_LINES = 2000;
-const MAX_BINARY_BYTES = 5 * 1024 * 1024;
+// Must fit MAX_FRAME_BYTES (1 MiB) after base64 (+33%) plus envelope.
+const MAX_BINARY_BYTES = 700 * 1024;
 const MAX_GREP_MATCHES = 200;
 const SKIP_DIRS = new Set([".git", "node_modules", ".fleet-worktrees"]);
 

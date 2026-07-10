@@ -107,5 +107,6 @@ export async function listSessions(root: string | undefined): Promise<SessionLis
 		}
 	}
 	await walk(base);
-	return sessions.sort((a, b) => b.updatedAt - a.updatedAt);
+	// Bounded so the report always fits MAX_FRAME_BYTES.
+	return sessions.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 200);
 }
