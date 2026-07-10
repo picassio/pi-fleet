@@ -69,6 +69,8 @@ Phased so every phase ends in something usable on its own. Later phases never re
 - `/fleet-tools <list>`: narrow/expand active tools mid-session
 - Multiple named bundles; `remote_spawn(bundle: "...")`; `platforms` enforcement (refuse mismatched spawns)
 - Bundle versioning + pinned-hash spawns
+- Model control: manifest `model.primary`/`fallbacks`/`pin` resolution at bootstrap, `remote_model` runtime tool, `model_select` drift reporting, per-machine model availability in `fleet_status`
+- `/fleet-settings` TUI (SettingsList): serving, trust table, default bundle, review, widget mode; config precedence spawn > bundle > machine
 
 **Exit:** switch a running worker from `default` to `rust-reviewer` from the server without losing its session.
 

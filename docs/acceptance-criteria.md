@@ -88,6 +88,16 @@ Grouped by phase (see [roadmap](roadmap.md)). Each criterion is testable; unit/i
 
 **AC-4.4 Pinned spawn.** `remote_spawn` with a pinned `bundleHash` refuses to run if the registry serves a different hash.
 
+**AC-4.5 Model fallback.** On a machine lacking the primary model's key but holding a fallback's key, the worker boots on the fallback and its ready report names the selected model; lacking all keys, spawn fails with `no_usable_model` listing every attempted model.
+
+**AC-4.6 Runtime model change.** `remote_model` switches a running worker's model and thinking level; the change is visible in the worker's next `get_state` and in `fleet_status` within 2 s.
+
+**AC-4.7 Model pinning.** With `"pin": true`, an in-worker model change attempt is refused and reported; with `pin: false`, drift is allowed and `fleet_status` shows expected vs actual.
+
+**AC-4.8 Settings precedence.** A spawn-time model override beats the bundle manifest, which beats the machine default; verified by spawning the same bundle with and without the override.
+
+**AC-4.9 Settings TUI.** `/fleet-settings` edits persist to `~/.pi/agent/pi-fleet.json`, take effect without restarting pi (trust edits apply to the next connection; widget mode immediately), and never write secrets.
+
 ## Phase 5 — Observability
 
 **AC-5.1 Follow view.** `/fleet` → select worker → live transcript renders new events with ≤ 1 s lag on a LAN-quality tailnet path; read-only by default.

@@ -110,11 +110,38 @@ pi natively persists worker sessions (JSONL, per-cwd) and exposes `switch_sessio
   "skills": ["skills"],
   "prompts": ["prompts"],
   "tools": { "active": ["read", "grep", "bash", "edit", "write"] },
-  "model": { "provider": "anthropic", "id": "claude-sonnet-4-5", "thinking": "medium" }
+  "model": {
+    "primary": { "provider": "anthropic", "id": "claude-sonnet-4-5", "thinking": "medium" },
+    "fallbacks": [{ "provider": "openai", "id": "gpt-5.2" }],
+    "pin": false
+  },
+  "review": { "maxRejects": 3 }
 }
 ```
 
 Sync algorithm: fetch manifest → compare `bundleHash` to cache dirs → fetch only missing/changed files into a temp dir → validate every path (POSIX, no `..`, no absolute, no reserved names, no case collisions) → atomic rename to `~/.pi/agent/fleet-cache/<bundleHash>/` → record provenance.
+
+## Configuration layers & TUI settings
+
+Three layers with one precedence rule: **spawn override > bundle manifest > machine config**.
+
+| Layer | Location | Owner | Contents |
+|---|---|---|---|
+| Machine | `~/.pi/agent/pi-fleet.json` | human, per machine | trust policies, listener port, auto-serve, agent autostart, widget prefs |
+| Bundle | `bundles/<name>/manifest.json` | server, versioned, synced | model+fallbacks+pin, thinking, tool allowlist, priming prompt, `review.maxRejects`, `platforms` |
+| Spawn | `remote_spawn` args | task-scoped (LLM or human) | bundle, model override, `fromSession`, pinned `bundleHash` |
+
+TUI surface on the server: `/fleet-settings` (SettingsList pattern, mirrors pi's built-in `/settings`) covering serving on/off, trust table (per-machine allow/steer/deny edit), default bundle, review, and widget mode (compact/detailed/off). Ambient UI: footer status via `setStatus("fleet", ...)` and the `setWidget` dashboard. Bundle contents are deliberately not editable in the TUI — they are versioned files; edit them with pi itself.
+
+## Model selection control
+
+Server expresses intent; the worker machine's locally held API keys constrain what is possible (bundles and frames never carry secrets).
+
+- **Spawn-time (declarative):** worker bootstrap walks `model.primary` then `model.fallbacks` with `pi.setModel()` (natively returns `false` when the machine lacks a key), applies `thinking`, and reports the actually selected model in its ready report. Nothing usable → `spawn_error: no_usable_model` listing what was tried.
+- **Runtime (imperative):** `remote_model(instanceId, modelRef, thinking?)` tool wraps pi RPC `set_model` / `set_thinking_level`; `get_available_models` powers validation before issuing the change.
+- **Drift control:** the worker extension forwards pi's native `model_select` events. `"pin": true` makes the worker refuse out-of-band model changes; unpinned drift is surfaced in `fleet_status`.
+- **Capability visibility:** agents report per-machine available models (providers with usable keys) in `hello`/`sessions_report`, so the orchestrator can choose spawn targets by model availability instead of failing spawns.
+- **Centralized-key option:** a bundle extension may `registerProvider("fleet-gateway", { baseUrl, apiKey: "$FLEET_GATEWAY_KEY" })` pointing at a team gateway (LiteLLM etc.) — the bundle ships config, each machine ships only the one gateway credential in env.
 
 ## Security model
 
