@@ -23,6 +23,8 @@ export class FrameConnection {
 	readonly socket: Socket;
 	private readonly decoder = new FrameDecoder();
 	private frameHandler: FrameHandler | undefined;
+	/** Frames received before onFrame() is registered are buffered, not dropped. */
+	private pendingFrames: Frame[] = [];
 	private closeHandler: CloseHandler | undefined;
 	private heartbeatTimer: NodeJS.Timeout | undefined;
 	private timeoutTimer: NodeJS.Timeout | undefined;
@@ -40,7 +42,8 @@ export class FrameConnection {
 			for (const result of this.decoder.feed(chunk)) {
 				if (result.ok) {
 					if (result.frame.type === "heartbeat") continue;
-					this.frameHandler?.(result.frame);
+					if (this.frameHandler) this.frameHandler(result.frame);
+					else this.pendingFrames.push(result.frame);
 				} else {
 					this.sendProtocolError(result.error);
 				}
@@ -60,6 +63,9 @@ export class FrameConnection {
 
 	onFrame(handler: FrameHandler): void {
 		this.frameHandler = handler;
+		const buffered = this.pendingFrames;
+		this.pendingFrames = [];
+		for (const frame of buffered) handler(frame);
 	}
 
 	onClose(handler: CloseHandler): void {
