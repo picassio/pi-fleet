@@ -161,6 +161,19 @@ export class FleetManager {
 		};
 	}
 
+	async fs(
+		instanceId: string,
+		request:
+			| { type: "fs_read"; path: string; offset?: number; limit?: number }
+			| { type: "fs_list"; path: string }
+			| { type: "fs_grep"; pattern: string; glob?: string }
+			| { type: "fs_diff"; ref?: string; staged?: boolean; stat?: boolean },
+	) {
+		const tracked = this.mustGet(instanceId);
+		const client = await this.agent(tracked.host);
+		return client.fs({ ...request, instanceId } as Parameters<AgentClient["fs"]>[0]);
+	}
+
 	async abort(instanceId: string): Promise<void> {
 		const tracked = this.mustGet(instanceId);
 		const client = await this.agent(tracked.host);

@@ -105,6 +105,19 @@ export class AgentClient {
 		throw new Error(`unexpected response: ${response.type}`);
 	}
 
+	/** Read-only file service (answered by the agent, not the worker). */
+	async fs(
+		request:
+			| { type: "fs_read"; instanceId: string; path: string; offset?: number; limit?: number }
+			| { type: "fs_list"; instanceId: string; path: string }
+			| { type: "fs_grep"; instanceId: string; pattern: string; glob?: string }
+			| { type: "fs_diff"; instanceId: string; ref?: string; staged?: boolean; stat?: boolean },
+	): Promise<FrameOf<"fs_result">> {
+		const response = await this.request({ v: 1, ...request } as Frame);
+		if (response.type === "fs_result") return response;
+		throw new Error(`unexpected response: ${response.type}`);
+	}
+
 	/** Fire-and-forget pi RPC command to a worker; replies arrive as events. */
 	rpc(instanceId: string, command: unknown): void {
 		this.connection.send({ v: 1, type: "rpc", instanceId, command });

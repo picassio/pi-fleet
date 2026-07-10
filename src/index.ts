@@ -254,6 +254,112 @@ function registerServerMode(pi: ExtensionAPI): void {
 		},
 	});
 
+	const fsResultToTool = (result: {
+		text?: string;
+		base64?: string;
+		mime?: string;
+		entries?: Array<{ name: string; kind: string; bytes?: number }>;
+		truncated?: boolean;
+		error?: { code: string; message: string };
+	}) => {
+		if (result.error) throw new Error(`${result.error.code}: ${result.error.message}`);
+		if (result.base64 && result.mime) {
+			return {
+				content: [{ type: "image" as const, data: result.base64, mimeType: result.mime }],
+				details: {} as Record<string, unknown>,
+			};
+		}
+		if (result.entries) {
+			return text(
+				result.entries
+					.map((entry) => `${entry.kind === "dir" ? "d" : "-"} ${entry.name}${entry.bytes !== undefined ? ` (${entry.bytes}B)` : ""}`)
+					.join("\n") || "(empty)",
+			);
+		}
+		return text(`${result.text ?? ""}${result.truncated ? "\n[truncated]" : ""}`);
+	};
+
+	pi.registerTool({
+		name: "remote_read",
+		label: "Remote Read",
+		description:
+			"Read a file from a fleet worker's cwd (agent-answered, zero worker tokens). " +
+			"Text pages via offset/limit; images (png/jpg/gif/webp) return as viewable images.",
+		parameters: Type.Object({
+			instanceId: Type.String(),
+			path: Type.String({ description: "Path relative to the worker's cwd" }),
+			offset: Type.Optional(Type.Number()),
+			limit: Type.Optional(Type.Number()),
+		}),
+		async execute(_id, params) {
+			return fsResultToTool(
+				await getFleet().fs(params.instanceId, {
+					type: "fs_read",
+					path: params.path,
+					...(params.offset !== undefined ? { offset: params.offset } : {}),
+					...(params.limit !== undefined ? { limit: params.limit } : {}),
+				}),
+			);
+		},
+	});
+
+	pi.registerTool({
+		name: "remote_ls",
+		label: "Remote Ls",
+		description: "List a directory in a fleet worker's cwd (agent-answered).",
+		parameters: Type.Object({ instanceId: Type.String(), path: Type.String() }),
+		async execute(_id, params) {
+			return fsResultToTool(await getFleet().fs(params.instanceId, { type: "fs_list", path: params.path }));
+		},
+	});
+
+	pi.registerTool({
+		name: "remote_grep",
+		label: "Remote Grep",
+		description: "Regex search in a fleet worker's cwd (agent-answered; skips .git/node_modules).",
+		parameters: Type.Object({
+			instanceId: Type.String(),
+			pattern: Type.String(),
+			glob: Type.Optional(Type.String({ description: "e.g. **/*.ts" })),
+		}),
+		async execute(_id, params) {
+			return fsResultToTool(
+				await getFleet().fs(params.instanceId, {
+					type: "fs_grep",
+					pattern: params.pattern,
+					...(params.glob ? { glob: params.glob } : {}),
+				}),
+			);
+		},
+	});
+
+	pi.registerTool({
+		name: "remote_diff",
+		label: "Remote Diff",
+		description:
+			"git diff in a fleet worker's cwd (agent-answered) — the primary review primitive. " +
+			"Use stat=true for an overview before reading full diffs.",
+		promptGuidelines: [
+			"Use remote_diff (not remote_prompt) to review a fleet worker's changes; it costs no worker tokens.",
+		],
+		parameters: Type.Object({
+			instanceId: Type.String(),
+			ref: Type.Optional(Type.String()),
+			staged: Type.Optional(Type.Boolean()),
+			stat: Type.Optional(Type.Boolean()),
+		}),
+		async execute(_id, params) {
+			return fsResultToTool(
+				await getFleet().fs(params.instanceId, {
+					type: "fs_diff",
+					...(params.ref ? { ref: params.ref } : {}),
+					...(params.staged !== undefined ? { staged: params.staged } : {}),
+					...(params.stat !== undefined ? { stat: params.stat } : {}),
+				}),
+			);
+		},
+	});
+
 	pi.registerTool({
 		name: "fleet_status",
 		label: "Fleet Status",

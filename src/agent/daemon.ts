@@ -11,6 +11,7 @@ import { FrameConnection } from "../core/connection.ts";
 import type { Frame, FrameOf } from "../core/frames.ts";
 import type { TailscaleIdentity } from "../core/tailscale.ts";
 import { InstanceSupervisor, type SupervisorOptions } from "./instances.ts";
+import { fsDiff, fsGrep, fsList, fsRead } from "./fsservice.ts";
 
 export const AGENT_DEFAULT_PORT = 9788;
 export const PACKAGE_VERSION = "0.0.1";
@@ -228,6 +229,41 @@ async function dispatch(
 					...(request.id ? { id: request.id } : {}),
 				});
 			}
+			return;
+		}
+		case "fs_read":
+		case "fs_list":
+		case "fs_grep":
+		case "fs_diff": {
+			const instanceId = (frame as { instanceId: string }).instanceId;
+			const record = supervisor.get(instanceId);
+			if (!record) {
+				connection.send({
+					v: 1,
+					type: "fs_result",
+					done: true,
+					error: { code: "unknown_instance", message: `no instance ${instanceId}` },
+					...(frame.id ? { id: frame.id } : {}),
+				});
+				return;
+			}
+			const cwd = record.cwd;
+			const payload =
+				frame.type === "fs_read"
+					? await fsRead(cwd, frame.path, {
+							...(frame.offset !== undefined ? { offset: frame.offset } : {}),
+							...(frame.limit !== undefined ? { limit: frame.limit } : {}),
+						})
+					: frame.type === "fs_list"
+						? await fsList(cwd, frame.path)
+						: frame.type === "fs_grep"
+							? await fsGrep(cwd, frame.pattern, frame.glob)
+							: await fsDiff(cwd, {
+									...(frame.ref !== undefined ? { ref: frame.ref } : {}),
+									...(frame.staged !== undefined ? { staged: frame.staged } : {}),
+									...(frame.stat !== undefined ? { stat: frame.stat } : {}),
+								});
+			connection.send({ v: 1, type: "fs_result", ...payload, ...(frame.id ? { id: frame.id } : {}) });
 			return;
 		}
 		default:
