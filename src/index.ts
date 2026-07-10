@@ -140,6 +140,8 @@ export default async function piFleet(pi: ExtensionAPI): Promise<void> {
 
 function registerServerMode(pi: ExtensionAPI): void {
 	let fleet: FleetManager | undefined;
+	let followId: string | undefined;
+	const followLines: string[] = [];
 	let lastUi: { setWidget(key: string, lines?: string[]): void; setStatus(key: string, text?: string): void } | undefined;
 	const renderFleet = () => {
 		if (!lastUi || !fleet) return;
@@ -166,6 +168,23 @@ function registerServerMode(pi: ExtensionAPI): void {
 		// "Task completion & verification" step 3).
 		fleet ??= new FleetManager({
 			onChange: renderFleet,
+			onInstanceEvent: (instanceId, event) => {
+				if (instanceId !== followId || !lastUi) return;
+				const typed = event as { type?: string; message?: { role?: string; content?: Array<{ type?: string; text?: string }> }; toolName?: string };
+				let line: string | undefined;
+				if (typed.type === "message_end" && typed.message?.role === "assistant") {
+					const textPart = (typed.message.content ?? []).find((part) => part.type === "text")?.text ?? "";
+					line = `assistant: ${textPart.split("\n")[0]?.slice(0, 100)}`;
+				} else if (typed.type === "tool_execution_start") {
+					line = `tool: ${typed.toolName ?? "?"}`;
+				} else if (typed.type === "agent_settled") {
+					line = "-- settled --";
+				}
+				if (!line) return;
+				followLines.push(line);
+				if (followLines.length > 8) followLines.shift();
+				lastUi.setWidget("fleet-follow", [`following ${followId}:`, ...followLines]);
+			},
 			onTaskDone: (frame) => {
 				renderFleet();
 				pi.sendMessage(
@@ -211,6 +230,37 @@ function registerServerMode(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", async () => {
 		await fleet?.close();
 		fleet = undefined;
+	});
+
+	pi.registerCommand("fleet-follow", {
+		description: "Follow a fleet worker's activity live in a widget (run again to stop)",
+		handler: async (args, ctx) => {
+			if (followId) {
+				followId = undefined;
+				followLines.length = 0;
+				if (ctx.hasUI) {
+					ctx.ui.setWidget("fleet-follow", undefined);
+					ctx.ui.notify("fleet-follow: stopped", "info");
+				}
+				return;
+			}
+			const instances = getFleet().status().filter((entry) => entry.state === "running");
+			if (instances.length === 0) {
+				if (ctx.hasUI) ctx.ui.notify("no running workers to follow", "warning");
+				return;
+			}
+			const choice =
+				args?.trim() ||
+				(ctx.hasUI
+					? await ctx.ui.select("Follow which worker?", instances.map((entry) => `${entry.instanceId} (${entry.host})`))
+					: undefined);
+			if (!choice) return;
+			followId = choice.split(" ")[0];
+			if (ctx.hasUI) {
+				lastUi = ctx.ui;
+				ctx.ui.setWidget("fleet-follow", [`following ${followId}:`, "(waiting for events)"]);
+			}
+		},
 	});
 
 	pi.registerCommand("fleet-doctor", {

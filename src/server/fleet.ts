@@ -46,6 +46,8 @@ export interface FleetManagerOptions {
 	onTaskDone?: (frame: { taskId: string; instanceId: string; seq: number; summary: string }) => void;
 	/** Fired on any fleet change worth re-rendering (spawn/stop/settle/task_done/reconnect). */
 	onChange?: () => void;
+	/** Fired for every worker event (follow view). */
+	onInstanceEvent?: (instanceId: string, event: unknown) => void;
 	/** Disable auto-reconnect (tests). */
 	autoReconnect?: boolean;
 }
@@ -385,6 +387,7 @@ export class FleetManager {
 		const tracked = this.instances.get(instanceId);
 		if (!tracked) return;
 		tracked.events.push(event);
+		this.options.onInstanceEvent?.(instanceId, event);
 		if (tracked.events.length > EVENT_BUFFER_LIMIT) {
 			tracked.events.splice(0, tracked.events.length - EVENT_BUFFER_LIMIT);
 		}
