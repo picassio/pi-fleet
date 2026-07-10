@@ -213,6 +213,14 @@ function registerServerMode(pi: ExtensionAPI): void {
 		fleet = undefined;
 	});
 
+	pi.registerCommand("fleet-doctor", {
+		description: "Diagnose pi-fleet: tailscale, registry, baselines, agents, workers",
+		handler: async (_args, ctx) => {
+			const lines = await getFleet().doctor();
+			if (ctx.hasUI) ctx.ui.notify(`fleet doctor:\n${lines.join("\n")}`, "info");
+		},
+	});
+
 	pi.registerCommand("fleet", {
 		description: "Show pi-fleet status",
 		handler: async (_args, ctx) => {

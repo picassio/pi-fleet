@@ -6,7 +6,7 @@
  * assistant message so blocking prompts can return the worker's result.
  */
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AgentClient } from "./agent-client.ts";
@@ -328,6 +328,37 @@ export class FleetManager {
 
 	get(instanceId: string): TrackedInstance | undefined {
 		return this.instances.get(instanceId);
+	}
+
+	/** Self-diagnosis lines for /fleet-doctor (Phase 5). */
+	async doctor(): Promise<string[]> {
+		const lines: string[] = [];
+		try {
+			const tailscale = new Tailscale();
+			const binary = await tailscale.findBinary();
+			lines.push(binary ? `tailscale: ok (${binary}, ip ${await tailscale.ip4()})` : "tailscale: NOT FOUND");
+		} catch (error) {
+			lines.push(`tailscale: ERROR ${error instanceof Error ? error.message : String(error)}`);
+		}
+		try {
+			const bundles = (await readdir(this.registryRoot, { withFileTypes: true }))
+				.filter((entry) => entry.isDirectory())
+				.map((entry) => entry.name);
+			lines.push(`registry: ${this.registryRoot} (${bundles.length} bundle(s): ${bundles.join(", ") || "none"})`);
+		} catch {
+			lines.push(`registry: MISSING ${this.registryRoot}`);
+		}
+		const baselines = await this.loadBaselines();
+		lines.push(`baselines: ${baselines.size}`);
+		const hosts = [...this.agents.entries()];
+		lines.push(
+			hosts.length === 0
+				? "agents: none connected"
+				: hosts.map(([host, client]) => `agent ${host}: ${client.isClosed ? "DISCONNECTED" : "connected"}`).join("\n"),
+		);
+		const instances = this.status();
+		lines.push(`workers: ${instances.filter((entry) => entry.state === "running").length} running / ${instances.length} tracked`);
+		return lines;
 	}
 
 	async close(): Promise<void> {

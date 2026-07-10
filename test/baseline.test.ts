@@ -162,3 +162,15 @@ describe("remote_model plumbing", () => {
 		expect(thinking.success).toBe(true);
 	});
 });
+
+describe("fleet doctor", () => {
+	it("reports registry, baselines, agents, and workers", async () => {
+		const manager = await setup();
+		await manager.spawn({ host: "127.0.0.1", cwd: tmpdir(), bundle: "default" });
+		const lines = (await manager.doctor()).join("\n");
+		expect(lines).toContain("registry:");
+		expect(lines).toMatch(/baselines: \d+/);
+		expect(lines).toContain("agent 127.0.0.1: connected");
+		expect(lines).toContain("workers: 1 running / 1 tracked");
+	});
+});
