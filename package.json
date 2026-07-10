@@ -11,15 +11,20 @@
   "engines": {
     "node": ">=20"
   },
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check": "npm run typecheck && npm run test"
   },
   "dependencies": {
+    "jiti": "2.7.0",
     "typebox": "1.1.38"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.80.6",
     "@types/node": "22.19.19",
     "typescript": "5.9.3",
     "vitest": "4.1.9"
