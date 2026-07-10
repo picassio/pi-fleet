@@ -60,15 +60,15 @@ pi install git:github.com/picassio/pi-fleet
 
 **Server / orchestrator machine**: that's it — the extension auto-loads in every pi session (fleet tools, `/fleet-*` commands).
 
-**Worker / agent machines**: run the agent from the installed package:
+**Worker / agent machines** (Linux/macOS) — one command:
 
 ```bash
-PKG=~/.pi/agent/git/github.com/picassio/pi-fleet
-node $PKG/scripts/pi-fleet-agent.mjs serve --server <your-machine-tailnet-name> [--max-workers 4]
-node $PKG/scripts/pi-fleet-agent.mjs install-service --server <name>   # systemd / launchd / schtasks
+curl -fsSL https://raw.githubusercontent.com/picassio/pi-fleet/main/scripts/bootstrap-agent.sh | sh -s -- --server <your-machine-tailnet-name> [--max-workers 4]
 ```
 
-(`npm install -g github:picassio/pi-fleet` also works if you prefer `pi-fleet-agent` on PATH.)
+This runs the official `pi install git:...`, then starts the agent as a systemd user service (falls back to nohup; idempotent, safe to re-run for updates). Windows: `pi install git:github.com/picassio/pi-fleet`, then `node %USERPROFILE%\.pi\agent\git\github.com\picassio\pi-fleet\scripts\pi-fleet-agent.mjs install-service --server <name>`.
+
+Workers spawned by the agent need **no** install at all — the agent injects its extension copy via `-e`.
 
 Workers spawned by the agent need **no** pi-fleet install of their own — the agent injects its extension copy via `-e`.
 
