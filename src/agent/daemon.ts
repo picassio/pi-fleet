@@ -10,6 +10,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { FrameConnection } from "../core/connection.ts";
 import type { Frame, FrameOf } from "../core/frames.ts";
 import type { TailscaleIdentity } from "../core/tailscale.ts";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { InstanceSupervisor, type SupervisorOptions } from "./instances.ts";
@@ -34,6 +35,8 @@ export interface AgentDaemonOptions {
 	maxWorkers?: number;
 	/** pi session storage root to search (default ~/.pi/agent/sessions). */
 	sessionsDir?: string;
+	/** Instance registry file (default ~/.pi/agent/fleet-agent/instances.json). */
+	instancesFile?: string;
 	/** Internal: wired by startAgentDaemon to register per-instance budgets. */
 	registerBudget?: (instanceId: string, maxCost: number) => void;
 	heartbeatIntervalMs?: number;
@@ -57,6 +60,25 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 	);
 	/** instanceId → pending taskId (set by rpc prompt frames carrying taskId). */
 	const pendingTasks = new Map<string, string>();
+	/** taskId -> connection that submitted it (gap fix #2: review ownership). */
+	const taskOwners = new Map<string, FrameConnection>();
+	const instancesFile =
+		options.instancesFile ?? join(homedir(), ".pi", "agent", "fleet-agent", "instances.json");
+	interface PersistedInstance {
+		instanceId: string;
+		pid?: number;
+		cwd: string;
+		bundle: string;
+		taskId?: string;
+		sessionPath?: string;
+	}
+	const persisted = new Map<string, PersistedInstance>();
+	const lostInstances: PersistedInstance[] = [];
+	const persist = () => {
+		void mkdir(join(instancesFile, ".."), { recursive: true })
+			.then(() => writeFile(instancesFile, JSON.stringify([...persisted.values()]), "utf8"))
+			.catch(() => {});
+	};
 	const emitTaskDone = (instanceId: string, taskId: string, status: "settled" | "budget_exceeded" | "aborted") => {
 		const frame = {
 			v: 1 as const,
@@ -69,6 +91,14 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 			...(lastAssistant.get(instanceId) ? { lastAssistantMessage: lastAssistant.get(instanceId) as string } : {}),
 		};
 		void outbox.put(frame).then(() => {
+			// Ownership-preferred delivery: only the submitting connection reviews;
+			// broadcast is the durability fallback when the owner is gone.
+			const owner = taskOwners.get(taskId);
+			taskOwners.delete(taskId);
+			if (owner && !owner.isClosed && owner.trySend(frame)) {
+				log(`task_done ${taskId} (${status}) delivered to owner`);
+				return;
+			}
 			for (const connection of connections) connection.trySend(frame);
 			log(`task_done ${taskId} (${status}) persisted + broadcast`);
 		});
@@ -84,6 +114,18 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 			options.supervisor?.onEvent?.(instanceId, event);
 			for (const connection of connections) {
 				connection.trySend({ v: 1, type: "event", instanceId, event });
+			}
+			const probeId = (event as { id?: unknown }).id;
+			if (typeof probeId === "string" && probeId === `probe-${instanceId}`) {
+				const data = (event as { data?: Record<string, unknown> }).data ?? {};
+				const sessionPath = [data.sessionFile, data.sessionPath, data.file].find(
+					(value) => typeof value === "string",
+				) as string | undefined;
+				const record = persisted.get(instanceId);
+				if (record && sessionPath) {
+					record.sessionPath = sessionPath;
+					persist();
+				}
 			}
 			const typed = event as {
 				type?: string;
@@ -118,6 +160,8 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 		onExit: (instanceId, code) => {
 			options.supervisor?.onExit?.(instanceId, code);
 			log(`instance ${instanceId} exited (${code})`);
+			persisted.delete(instanceId);
+			persist();
 			// Crash mid-task: never leave the orchestrator waiting (gap fix).
 			const taskId = pendingTasks.get(instanceId);
 			if (taskId !== undefined) {
@@ -129,8 +173,37 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 
 	options.registerBudget = (instanceId, maxCost) => budgets.set(instanceId, maxCost);
 
+	// Gap fix #1: previous-life instances are lost (stdio cannot be re-attached).
+	// Kill live orphans, surface them as `lost` with session paths, and emit
+	// durable aborted task_done for anything that was mid-task.
+	try {
+		const raw = JSON.parse(await readFile(instancesFile, "utf8")) as PersistedInstance[];
+		for (const record of raw) {
+			if (record.pid !== undefined) {
+				try {
+					process.kill(record.pid, "SIGTERM");
+					log(`killed orphaned worker ${record.instanceId} (pid ${record.pid})`);
+				} catch {
+					// already dead
+				}
+			}
+			lostInstances.push(record);
+			if (record.taskId) {
+				lastAssistant.set(record.instanceId, "(agent restarted; worker lost mid-task)");
+				emitTaskDone(record.instanceId, record.taskId, "aborted");
+			}
+		}
+	} catch {
+		// no previous registry
+	}
+	persisted.clear();
+	persist();
+
+	const agentState: AgentSharedState = { taskOwners, persisted, persist, lostInstances, probe: (id) => {
+		supervisor.writeRpc(id, { type: "get_state", id: `probe-${id}` });
+	} };
 	const server = createServer((socket) => {
-		void handleConnection(socket, options, supervisor, connections, log, outbox, pendingTasks).catch((error) => {
+		void handleConnection(socket, options, supervisor, connections, log, outbox, pendingTasks, agentState).catch((error) => {
 			log(`connection error: ${error instanceof Error ? error.message : String(error)}`);
 			socket.destroy();
 		});
@@ -160,6 +233,14 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 	};
 }
 
+interface AgentSharedState {
+	taskOwners: Map<string, FrameConnection>;
+	persisted: Map<string, { instanceId: string; pid?: number; cwd: string; bundle: string; taskId?: string; sessionPath?: string }>;
+	persist: () => void;
+	lostInstances: Array<{ instanceId: string; cwd: string; bundle: string; sessionPath?: string }>;
+	probe: (instanceId: string) => void;
+}
+
 async function handleConnection(
 	socket: Socket,
 	options: AgentDaemonOptions,
@@ -168,6 +249,7 @@ async function handleConnection(
 	log: (line: string) => void,
 	outbox: TaskOutbox,
 	pendingTasks: Map<string, string>,
+	state: AgentSharedState,
 ): Promise<void> {
 	const ip = (socket.remoteAddress ?? "").replace(/^::ffff:/, "");
 
@@ -225,8 +307,14 @@ async function handleConnection(
 		}
 		if (frame.type === "rpc" && frame.taskId) {
 			pendingTasks.set(frame.instanceId, frame.taskId);
+			state.taskOwners.set(frame.taskId, connection);
+			const record = state.persisted.get(frame.instanceId);
+			if (record) {
+				record.taskId = frame.taskId;
+				state.persist();
+			}
 		}
-		void dispatch(frame, connection, supervisor, options).catch((error) => {
+		void dispatch(frame, connection, supervisor, options, state).catch((error) => {
 			connection.trySend({
 				v: 1,
 				type: "error",
@@ -242,18 +330,28 @@ async function dispatch(
 	connection: FrameConnection,
 	supervisor: InstanceSupervisor,
 	agentOptions: AgentDaemonOptions,
+	state: AgentSharedState,
 ): Promise<void> {
 	switch (frame.type) {
 		case "hello":
 			return; // informational
 		case "list": {
-			const instances = supervisor.list().map((record) => ({
-				instanceId: record.instanceId,
-				...(record.pid !== undefined ? { pid: record.pid } : {}),
-				cwd: record.cwd,
-				bundle: record.bundle,
-				state: record.state,
-			}));
+			const instances = [
+				...supervisor.list().map((record) => ({
+					instanceId: record.instanceId,
+					...(record.pid !== undefined ? { pid: record.pid } : {}),
+					cwd: record.cwd,
+					bundle: record.bundle,
+					state: record.state,
+				})),
+				...state.lostInstances.map((record) => ({
+					instanceId: record.instanceId,
+					cwd: record.cwd,
+					bundle: record.bundle,
+					state: "lost",
+					...(record.sessionPath ? { sessionPath: record.sessionPath } : {}),
+				})),
+			];
 			connection.send({ v: 1, type: "instances", instances, ...(frame.id ? { id: frame.id } : {}) });
 			return;
 		}
@@ -284,6 +382,14 @@ async function dispatch(
 				if (request.budget?.maxCost !== undefined) {
 					agentOptions.registerBudget?.(record.instanceId, request.budget.maxCost);
 				}
+				state.persisted.set(record.instanceId, {
+					instanceId: record.instanceId,
+					...(record.pid !== undefined ? { pid: record.pid } : {}),
+					cwd: record.cwd,
+					bundle: record.bundle,
+				});
+				state.persist();
+				state.probe(record.instanceId);
 				connection.send({
 					v: 1,
 					type: "spawned",

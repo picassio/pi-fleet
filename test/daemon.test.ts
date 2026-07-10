@@ -67,6 +67,7 @@ async function startAgent(options: {
 		port: 0,
 		machine: "buildbox",
 		pinnedServer: "claude3-10",
+		instancesFile: join(tmpdir(), `pf-if-${Math.random().toString(36).slice(2)}.json`),
 		whois: async () => {
 			if (options.whoisIdentity === "fail") throw new Error("whois unavailable");
 			return options.whoisIdentity ?? SERVER_IDENTITY;
@@ -136,9 +137,18 @@ describe("AC-2.3 spawn round-trip / AC-2.4 RPC forwarding", () => {
 		// RPC forwarding: two commands, replies arrive tagged and in order.
 		client.rpc(instance.instanceId, { type: "get_state", id: "a" });
 		client.rpc(instance.instanceId, { type: "get_commands", id: "b" });
-		await expectPoll(() => events.filter((entry) => (entry.event as { id?: string }).id).length >= 2);
+		await expectPoll(
+			() =>
+				events.filter((entry) => {
+					const id = (entry.event as { id?: string }).id;
+					return id && !id.startsWith("probe-");
+				}).length >= 2,
+		);
 
-		const tagged = events.filter((entry) => (entry.event as { id?: string }).id);
+		const tagged = events.filter((entry) => {
+			const id = (entry.event as { id?: string }).id;
+			return id && !id.startsWith("probe-"); // exclude the agent's session-path probe
+		});
 		expect(tagged.every((entry) => entry.instanceId === instance.instanceId)).toBe(true);
 		expect(tagged.map((entry) => (entry.event as { id?: string }).id)).toEqual(["a", "b"]);
 
@@ -217,6 +227,7 @@ describe("AC-3.14 maxWorkers", () => {
 			port: 0,
 			machine: "buildbox",
 			pinnedServer: "claude3-10",
+		instancesFile: join(tmpdir(), `pf-if-${Math.random().toString(36).slice(2)}.json`),
 			maxWorkers: 1,
 			whois: async () => SERVER_IDENTITY,
 			supervisor: { resolveCommand: async () => ({ command: process.execPath, args: [workerPath] }) },

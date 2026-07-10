@@ -66,6 +66,7 @@ async function setup(): Promise<FleetManager> {
 		port: 0,
 		machine: "buildbox",
 		pinnedServer: "claude3-10",
+		instancesFile: join(tmpdir(), `pf-if-${Math.random().toString(36).slice(2)}.json`),
 		whois: async () => ({ machine: "claude3-10", user: "ana@github" }),
 		supervisor: { resolveCommand: async () => ({ command: process.execPath, args: [workerPath] }) },
 	});
@@ -189,6 +190,7 @@ describe("AC-3.5.5 session_search", () => {
 			port: 0,
 			machine: "buildbox",
 			pinnedServer: "claude3-10",
+		instancesFile: join(tmpdir(), `pf-if-${Math.random().toString(36).slice(2)}.json`),
 			sessionsDir,
 			whois: async () => ({ machine: "claude3-10", user: "ana@github" }),
 			supervisor: { resolveCommand: async () => ({ command: process.execPath, args: [workerPath] }) },

@@ -59,6 +59,7 @@ async function startAgent(outboxDir: string): Promise<RunningAgent> {
 		port: 0,
 		machine: "buildbox",
 		pinnedServer: "claude3-10",
+		instancesFile: join(tmpdir(), `pf-if-${Math.random().toString(36).slice(2)}.json`),
 		whois: async () => ({ machine: "claude3-10", user: "ana@github" }),
 		outboxDir,
 		supervisor: {
@@ -179,6 +180,7 @@ setInterval(() => {}, 1000);
 			port: 0,
 			machine: "buildbox",
 			pinnedServer: "claude3-10",
+		instancesFile: join(tmpdir(), `pf-if-${Math.random().toString(36).slice(2)}.json`),
 			whois: async () => ({ machine: "claude3-10", user: "ana@github" }),
 			outboxDir,
 			supervisor: { resolveCommand: async () => ({ command: process.execPath, args: [workerPath] }) },
@@ -212,6 +214,7 @@ setInterval(() => {}, 1000);
 			port: 0,
 			machine: "buildbox",
 			pinnedServer: "claude3-10",
+		instancesFile: join(tmpdir(), `pf-if-${Math.random().toString(36).slice(2)}.json`),
 			whois: async () => ({ machine: "claude3-10", user: "ana@github" }),
 			outboxDir,
 			supervisor: { resolveCommand: async () => ({ command: process.execPath, args: [workerPath] }) },
@@ -222,5 +225,70 @@ setInterval(() => {}, 1000);
 		await manager.prompt(tracked.instanceId, "doomed", "t-crash");
 		await poll(() => received.length === 1, 10_000);
 		expect(received[0]?.status).toBe("aborted");
+	});
+});
+
+describe("gap fix: agent restart with previous-life instances", () => {
+	it("reports lost instances with session paths and emits aborted task_done", async () => {
+		const outboxDir = await mkdtemp(join(tmpdir(), "pf-outbox-"));
+		const instancesFile = join(await mkdtemp(join(tmpdir(), "pf-inst-")), "instances.json");
+		await writeFile(
+			instancesFile,
+			JSON.stringify([
+				{ instanceId: "i-old1", pid: 99999999, cwd: "/w", bundle: "default", taskId: "t-lost", sessionPath: "/s/old1.jsonl" },
+				{ instanceId: "i-old2", cwd: "/w", bundle: "default", sessionPath: "/s/old2.jsonl" },
+			]),
+		);
+		const workerPath = await makePromptWorker();
+		running = await startAgentDaemon({
+			host: "127.0.0.1",
+			port: 0,
+			machine: "buildbox",
+			pinnedServer: "claude3-10",
+			whois: async () => ({ machine: "claude3-10", user: "ana@github" }),
+			outboxDir,
+			instancesFile,
+			supervisor: { resolveCommand: async () => ({ command: process.execPath, args: [workerPath] }) },
+		});
+		const received: Array<{ taskId: string; status?: string }> = [];
+		const manager = makeManager(running.port, (frame) => received.push(frame as { taskId: string; status?: string }));
+		const client = await (manager as unknown as { agent(host: string): Promise<import("../src/server/agent-client.ts").AgentClient> }).agent("127.0.0.1");
+
+		await poll(() => received.length === 1);
+		expect(received[0]).toMatchObject({ taskId: "t-lost", status: "aborted" });
+
+		const listed = await client.list();
+		const lost = listed.filter((entry) => entry.state === "lost");
+		expect(lost.map((entry) => entry.instanceId).sort()).toEqual(["i-old1", "i-old2"]);
+		expect(lost.find((entry) => entry.instanceId === "i-old1")?.sessionPath).toBe("/s/old1.jsonl");
+	});
+});
+
+describe("gap fix: task ownership delivery", () => {
+	it("delivers task_done only to the submitting connection while it lives", async () => {
+		const outboxDir = await mkdtemp(join(tmpdir(), "pf-outbox-"));
+		const workerPath = await makePromptWorker();
+		running = await startAgentDaemon({
+			host: "127.0.0.1",
+			port: 0,
+			machine: "buildbox",
+			pinnedServer: "claude3-10",
+		instancesFile: join(tmpdir(), `pf-if-${Math.random().toString(36).slice(2)}.json`),
+			whois: async () => ({ machine: "claude3-10", user: "ana@github" }),
+			outboxDir,
+			supervisor: { resolveCommand: async () => ({ command: process.execPath, args: [workerPath] }) },
+		});
+		const gotA: string[] = [];
+		const gotB: string[] = [];
+		const managerA = makeManager(running.port, (frame) => gotA.push(frame.taskId));
+		const managerB = makeManager(running.port, (frame) => gotB.push(frame.taskId));
+		await managerB.agent("127.0.0.1"); // second orchestrator connected
+
+		const tracked = await managerA.spawn({ host: "127.0.0.1", cwd: tmpdir(), bundle: "default" });
+		await managerA.prompt(tracked.instanceId, "job", "t-owned");
+		await poll(() => gotA.length === 1);
+		await new Promise((resolvePromise) => setTimeout(resolvePromise, 300));
+		expect(gotA).toEqual(["t-owned"]);
+		expect(gotB).toEqual([]); // no double-review
 	});
 });
