@@ -108,6 +108,7 @@ describe.skipIf(!available)("Phase 1 exit: real pi worker provisions from a loca
 				const names = data.commands.map((command) => command.name);
 				expect(names).toContain("bundle-hello"); // hosted bundle extension (AC-1.2)
 				expect(names).toContain("skill:greet"); // synced bundle skill (AC-1.1)
+				expect(names).toContain("fleet-use"); // Phase 4 rebundle command present in worker mode
 			} finally {
 				child.kill();
 			}

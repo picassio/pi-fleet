@@ -44,6 +44,38 @@ export default async function piFleet(pi: ExtensionAPI): Promise<void> {
 		promptPaths: resources.promptPaths,
 	}));
 
+	// Phase 4: hot rebundle. Re-point the env and reload; the async factory
+	// re-provisions from the registry while session history survives (AC-4.1).
+	pi.registerCommand("fleet-use", {
+		description: "Switch this worker to another bundle (re-sync + reload, session preserved)",
+		handler: async (args, ctx) => {
+			const bundle = args?.trim();
+			if (!bundle) {
+				if (ctx.hasUI) ctx.ui.notify("usage: /fleet-use <bundle>", "error");
+				return;
+			}
+			process.env.PI_FLEET_BUNDLE = bundle;
+			delete process.env.PI_FLEET_BUNDLE_HASH; // pin belongs to the old bundle
+			await ctx.reload();
+			return;
+		},
+	});
+
+	// Phase 4: live tool narrowing without a reload (AC-4.2).
+	pi.registerCommand("fleet-tools", {
+		description: "Set this worker's active tools, e.g. /fleet-tools read,grep",
+		handler: async (args, ctx) => {
+			const names = (args ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+			if (names.length === 0) {
+				if (ctx.hasUI) ctx.ui.notify(`active: ${pi.getActiveTools().join(", ")}`, "info");
+				return;
+			}
+			const registered = new Set(pi.getAllTools().map((tool) => tool.name));
+			pi.setActiveTools(names.filter((name) => registered.has(name)));
+			if (ctx.hasUI) ctx.ui.notify(`active tools: ${pi.getActiveTools().join(", ")}`, "info");
+		},
+	});
+
 	pi.on("session_start", async (event, ctx) => {
 		if (event.reason !== "startup" && event.reason !== "reload") return;
 
