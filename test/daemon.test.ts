@@ -238,3 +238,35 @@ describe("AC-3.14 maxWorkers", () => {
 		expect((await client.list()).filter((entry) => entry.state === "running")).toHaveLength(1);
 	});
 });
+
+describe("gap fix: tailnet IP rebind", () => {
+	it("rebinds the listener when the ip provider reports a change; workers survive", async () => {
+		const workerPath = await makeFakeWorker();
+		let ip = "127.0.0.1";
+		running = await startAgentDaemon({
+			host: "127.0.0.1",
+			port: 0,
+			machine: "buildbox",
+			pinnedServer: "claude3-10",
+			instancesFile: join(tmpdir(), `pf-if-${Math.random().toString(36).slice(2)}.json`),
+			whois: async () => SERVER_IDENTITY,
+			ipProvider: { current: async () => ip, intervalMs: 100 },
+			supervisor: { resolveCommand: async () => ({ command: process.execPath, args: [workerPath] }) },
+		});
+		client = await AgentClient.connect("127.0.0.1", running.port);
+		const instance = await client.spawn({ cwd: tmpdir(), bundle: "default" });
+		client.close();
+		client = undefined;
+
+		ip = "0.0.0.0"; // trigger rebind (bindable on all OSes)
+		await expectPoll(() => {
+			const address = running?.server.address();
+			return typeof address === "object" && address !== null && address.address === "0.0.0.0";
+		});
+
+		// New connections work on the rebound listener; worker survived.
+		client = await AgentClient.connect("127.0.0.1", running.port);
+		const listed = await client.list();
+		expect(listed.find((entry) => entry.instanceId === instance.instanceId)?.state).toBe("running");
+	});
+});

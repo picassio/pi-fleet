@@ -276,9 +276,11 @@ function registerServerMode(pi: ExtensionAPI): void {
 					await run("launchctl", ["load", path]);
 					if (ctx.hasUI) ctx.ui.notify(`fleet service installed + started (launchd, pinned ${pinnedServer})`, "info");
 				} else {
-					if (ctx.hasUI) {
-						ctx.ui.notify("Windows: run the schtasks command printed by: node <pkg>/scripts/pi-fleet-agent.mjs install-service --server " + pinnedServer, "warning");
-					}
+					// Windows: create + start the per-user onlogon task directly (gap fix #4).
+					const action = `"${spec.nodePath}" "${spec.entryPath}" serve --server ${pinnedServer} --port ${spec.port}`;
+					await run("schtasks", ["/create", "/f", "/tn", "pi-fleet-agent", "/sc", "onlogon", "/rl", "limited", "/tr", action]);
+					await run("schtasks", ["/run", "/tn", "pi-fleet-agent"]);
+					if (ctx.hasUI) ctx.ui.notify(`fleet service installed + started (scheduled task, pinned ${pinnedServer})`, "info");
 				}
 			} catch (error) {
 				if (ctx.hasUI) ctx.ui.notify(`fleet-service failed: ${error instanceof Error ? error.message : String(error)}`, "error");

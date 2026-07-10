@@ -39,6 +39,7 @@ if (command === "serve") {
 		machine: hostname(),
 		pinnedServer,
 		whois: (ip) => tailscale.whois(ip),
+		ipProvider: { current: () => tailscale.ip4() },
 		...(flag("max-workers") ? { maxWorkers: Number(flag("max-workers")) } : {}),
 		log: (line) => console.log(`[${new Date().toISOString()}] ${line}`),
 	});

@@ -37,6 +37,8 @@ export interface AgentDaemonOptions {
 	sessionsDir?: string;
 	/** Instance registry file (default ~/.pi/agent/fleet-agent/instances.json). */
 	instancesFile?: string;
+	/** When set, poll for the tailnet IP and rebind the listener on change (gap fix #3). */
+	ipProvider?: { current: () => Promise<string>; intervalMs?: number };
 	/** Internal: wired by startAgentDaemon to register per-instance budgets. */
 	registerBudget?: (instanceId: string, maxCost: number) => void;
 	heartbeatIntervalMs?: number;
@@ -220,15 +222,45 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 	const port = typeof address === "object" && address !== null ? address.port : options.port;
 	log(`agent listening on ${options.host}:${port}, pinned server: ${options.pinnedServer}`);
 
+	let activeServer = server;
+	let currentHost = options.host;
+	let rebindTimer: NodeJS.Timeout | undefined;
+	if (options.ipProvider) {
+		const provider = options.ipProvider;
+		rebindTimer = setInterval(() => {
+			void provider
+				.current()
+				.then(async (nextHost) => {
+					if (nextHost === currentHost) return;
+					log(`tailnet IP changed ${currentHost} -> ${nextHost}; rebinding (workers unaffected)`);
+					await new Promise<void>((resolvePromise) => activeServer.close(() => resolvePromise()));
+					const next = createServer((socket) => {
+						void handleConnection(socket, options, supervisor, connections, log, outbox, pendingTasks, agentState).catch(() => socket.destroy());
+					});
+					await new Promise<void>((resolvePromise, rejectPromise) => {
+						next.once("error", rejectPromise);
+						next.listen(port, nextHost, () => resolvePromise());
+					});
+					activeServer = next;
+					currentHost = nextHost;
+				})
+				.catch((error) => log(`ip poll failed: ${error instanceof Error ? error.message : String(error)}`));
+		}, options.ipProvider.intervalMs ?? 60_000);
+		rebindTimer.unref?.();
+	}
+
 	return {
-		server,
+		get server() {
+			return activeServer;
+		},
 		host: options.host,
 		port,
 		supervisor,
 		close: async () => {
+			if (rebindTimer) clearInterval(rebindTimer);
 			for (const connection of connections) connection.close();
 			await supervisor.stopAll();
-			await new Promise<void>((resolvePromise) => server.close(() => resolvePromise()));
+			await new Promise<void>((resolvePromise) => activeServer.close(() => resolvePromise()));
 		},
 	};
 }
