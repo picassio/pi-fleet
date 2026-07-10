@@ -517,6 +517,41 @@ function registerServerMode(pi: ExtensionAPI): void {
 	});
 
 	pi.registerTool({
+		name: "remote_model",
+		label: "Remote Model",
+		description:
+			"Switch a fleet worker's model and/or thinking level at runtime " +
+			"(e.g. downgrade a worker to a cheaper model mid-task).",
+		parameters: Type.Object({
+			instanceId: Type.String(),
+			provider: Type.Optional(Type.String()),
+			modelId: Type.Optional(Type.String()),
+			thinking: Type.Optional(Type.String({ description: "off|minimal|low|medium|high|xhigh|max" })),
+		}),
+		async execute(_id, params) {
+			const manager = getFleet();
+			const lines: string[] = [];
+			if (params.provider && params.modelId) {
+				const response = (await manager.rpcRequest(params.instanceId, {
+					type: "set_model",
+					provider: params.provider,
+					modelId: params.modelId,
+				})) as { success?: boolean; error?: string };
+				if (response.success === false) {
+					throw new Error(`set_model failed: ${response.error ?? "no usable key on that machine?"}`);
+				}
+				lines.push(`model → ${params.provider}/${params.modelId}`);
+			}
+			if (params.thinking) {
+				await manager.rpcRequest(params.instanceId, { type: "set_thinking_level", level: params.thinking });
+				lines.push(`thinking → ${params.thinking}`);
+			}
+			if (lines.length === 0) return text("nothing to change (pass provider+modelId and/or thinking)");
+			return text(`${params.instanceId}: ${lines.join(", ")}`);
+		},
+	});
+
+	pi.registerTool({
 		name: "remote_accept",
 		label: "Remote Accept",
 		description: "Accept a fleet worker's completed task: disposition stop (default) or keep_idle.",

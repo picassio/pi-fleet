@@ -144,3 +144,21 @@ describe("Phase 4 enforcement", () => {
 		).rejects.toThrow(/targets \[fake-os\]/);
 	});
 });
+
+describe("remote_model plumbing", () => {
+	it("set_model and set_thinking_level round-trip through rpcRequest", async () => {
+		const manager = await setup();
+		const tracked = await manager.spawn({ host: "127.0.0.1", cwd: tmpdir(), bundle: "default" });
+		const setModel = (await manager.rpcRequest(tracked.instanceId, {
+			type: "set_model",
+			provider: "anthropic",
+			modelId: "claude-sonnet-4-5",
+		})) as { success?: boolean; type?: string };
+		expect(setModel.success).toBe(true);
+		const thinking = (await manager.rpcRequest(tracked.instanceId, {
+			type: "set_thinking_level",
+			level: "high",
+		})) as { success?: boolean };
+		expect(thinking.success).toBe(true);
+	});
+});
