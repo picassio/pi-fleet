@@ -3,12 +3,13 @@
 #   curl -fsSL https://raw.githubusercontent.com/picassio/pi-fleet/main/scripts/bootstrap-agent.sh | sh -s -- --server <machine> [--port 9788] [--max-workers 4]
 set -e
 
-SERVER=""; PORT="9788"; MAXW=""
+SERVER=""; PORT="9788"; MAXW=""; CCPATCH=""
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--server) SERVER="$2"; shift 2 ;;
 		--port) PORT="$2"; shift 2 ;;
 		--max-workers) MAXW="$2"; shift 2 ;;
+		--with-cc-patch) CCPATCH="1"; shift ;;
 		*) echo "unknown arg: $1" >&2; exit 1 ;;
 	esac
 done
@@ -21,6 +22,12 @@ tailscale ip -4 >/dev/null 2>&1 || { echo "tailscale is not up" >&2; exit 1; }
 
 echo "installing pi-fleet via pi (official package flow)..."
 pi install git:github.com/picassio/pi-fleet
+
+if [ -n "$CCPATCH" ]; then
+	echo "installing pi-cc-patch (Claude Code subscription auth for workers)..."
+	pi install git:github.com/picassio/pi-cc-patch
+	echo "note: workers on this machine also need Claude Code credentials (see pi-cc-patch README)"
+fi
 
 PKG="$HOME/.pi/agent/git/github.com/picassio/pi-fleet"
 [ -f "$PKG/scripts/pi-fleet-agent.mjs" ] || { echo "install did not produce $PKG" >&2; exit 1; }

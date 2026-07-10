@@ -69,12 +69,14 @@ pi install git:github.com/picassio/pi-fleet
 That pi session now serves as the fleet agent (workers live while the session runs). For a durable headless agent instead (Linux/macOS) — one command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/picassio/pi-fleet/main/scripts/bootstrap-agent.sh | sh -s -- --server <your-machine-tailnet-name> [--max-workers 4]
+curl -fsSL https://raw.githubusercontent.com/picassio/pi-fleet/main/scripts/bootstrap-agent.sh | sh -s -- --server <your-machine-tailnet-name> [--max-workers 4] [--with-cc-patch]
 ```
 
 This runs the official `pi install git:...`, then starts the agent as a systemd user service (falls back to nohup; idempotent, safe to re-run for updates). Windows: `pi install git:github.com/picassio/pi-fleet`, then `node %USERPROFILE%\.pi\agent\git\github.com\picassio\pi-fleet\scripts\pi-fleet-agent.mjs install-service --server <name>`.
 
-Workers spawned by the agent need **no** install at all — the agent injects its extension copy via `-e`.
+Workers spawned by the agent need **no** install at all — the agent injects its extension copy via `-e`, and they auto-load any pi packages installed on that machine.
+
+**Claude Code auth for workers**: pass `--with-cc-patch` to the bootstrap (or `pi install git:github.com/picassio/pi-cc-patch` on the machine) so workers use your Claude Code subscription instead of API keys. The machine still needs Claude Code credentials present.
 
 Workers spawned by the agent need **no** pi-fleet install of their own — the agent injects its extension copy via `-e`.
 
