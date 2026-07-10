@@ -189,7 +189,11 @@ Server expresses intent; the worker machine's locally held API keys constrain wh
 ## Security model
 
 - Listener binds the tailscale interface IP only, never `0.0.0.0`
-- Every inbound TCP connection: `tailscale whois --json <ip>` → identity; unknown machine → `ctx.ui.confirm` on the server (or auto-deny for the headless agent); decisions persisted in `~/.pi/agent/pi-fleet.json` as `{ machine, user, policy: "allow" | "steer" | "deny" }`
+- Every inbound TCP connection: `tailscale whois --json <ip>` → identity; unknown machine → `ctx.ui.confirm` on the server; decisions persisted in `~/.pi/agent/pi-fleet.json` as `{ machine, user, policy: "allow" | "steer" | "deny" }`
+- **Mutual trust, asymmetric bootstrap:** agents are headless and deny-by-default. `/fleet-install-agent --server <tailnet-machine-name>` pins the server identity at install; the agent whois-checks every inbound connection against the pin and refuses everything else — no dialog, no fallback. Re-pointing an agent is an explicit local re-install, never a remote operation. Without the pin, any tailnet peer could orchestrate every machine.
+- Bundle supply chain stated plainly: a compromised server (or bundle registry) compromises the fleet — bundles execute with full permissions on workers. Mitigations: pinned-hash spawns, provisioning audit entries, version-skew reporting. A consolidated `SECURITY.md` (threat model, policy tiers, what the tailnet does and does not provide) ships with Phase 2.
+- All task-scoped frames carry a `traceId` (minted at spawn) so spawn → task_done → verdict → deliver correlates across machines in logs and doctor output.
+- Frames are validated at the wire boundary against the same typebox schemas that generate their TypeScript types; malformed frames are rejected with a protocol error, never partially processed.
 - Bundles execute with full permissions on workers: spawns can pin `bundleHash`; workers record loaded bundle name+hash via `appendEntry`; server logs which identity spawned what
 - No secrets in bundles or frames
 
@@ -209,6 +213,7 @@ Server expresses intent; the worker machine's locally held API keys constrain wh
 
 - **Unit** (Phase 0): manifest diff/sync against a `file://` registry fake; path-safety corpus (traversal, reserved names, collisions); frame codec round-trips; spawn-command resolution per platform (mocked)
 - **Integration** (loopback): agent daemon + real `pi --mode rpc` child on 127.0.0.1 — no tailnet required; whois layer faked behind an interface
+- **E2E in CI, zero tokens:** the suite ships a **faux-provider test bundle** — a bundle extension that calls `registerProvider` with a scripted `streamSimple` fake LLM (deterministic responses and tool calls). Workers provisioned with it exercise the full loop (spawn → provision → prompt → tool call → task_done → reject → revise → accept → deliver) on loopback with no API keys, while also covering the bundle mechanism itself
 - **E2E** (manual, pre-release): two tailnet machines, checklist mirroring the acceptance criteria
 - CI: GitHub Actions matrix ubuntu-latest / macos-latest / windows-latest running unit + loopback integration
 

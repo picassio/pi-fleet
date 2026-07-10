@@ -34,6 +34,10 @@ Grouped by phase (see [roadmap](roadmap.md)). Each criterion is testable; unit/i
 
 **AC-2.2 Whois gate.** An inbound connection from an unknown tailnet machine triggers exactly one confirm dialog with machine + user identity; deny closes the connection; both decisions persist across restarts.
 
+**AC-2.2a Server pinning.** An agent installed with `--server laptop` refuses a connection from any other tailnet machine (including one with an `allow` policy on the server side) without prompting; only a local re-install changes the pin.
+
+**AC-2.2b Faux-provider E2E.** The CI loopback suite drives spawn → provision → prompt → tool call → task_done → reject → revise → accept → deliver end-to-end using the faux-provider bundle, with no network LLM calls (asserted by the fake's call log) on all three OSes.
+
 **AC-2.3 Spawn round-trip.** `spawn { cwd, bundle }` on the control plane returns `spawned { instanceId }`, and the agent's `list` includes the instance with state `running`.
 
 **AC-2.4 RPC forwarding.** A `prompt` RPC command sent through the agent reaches the worker, and the resulting agent events stream back tagged with the correct `instanceId`, in order.
@@ -134,4 +138,8 @@ Grouped by phase (see [roadmap](roadmap.md)). Each criterion is testable; unit/i
 
 **AC-X.3 No secrets on the wire or in bundles.** Frames and manifests never carry API keys; workers use their own machine-local pi auth.
 
-**AC-X.4 Version negotiation.** A v1 peer receiving a frame with `v: 2` responds with a protocol error frame and closes cleanly instead of misparsing.
+**AC-X.4 Trace correlation.** Every frame belonging to one task carries the same `traceId`; `fleet doctor --trace <id>` (or logs) reconstructs the full spawn→deliver timeline across server and agent.
+
+**AC-X.5 Wire validation.** A frame that passes JSON parsing but violates its typebox schema is rejected with a protocol error naming the frame type and field; no handler observes a partially valid frame.
+
+**AC-X.6 Version negotiation.** A v1 peer receiving a frame with `v: 2` responds with a protocol error frame and closes cleanly instead of misparsing.
