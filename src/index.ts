@@ -9,6 +9,8 @@
  *   has no side effects (AC-X.1).
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { FleetManager } from "./server/fleet.ts";
 import { loadBundleExtensions, type BundleExtensionLoadResult } from "./worker/host.ts";
 import {
 	parseWorkerEnv,
@@ -105,12 +107,152 @@ export default async function piFleet(pi: ExtensionAPI): Promise<void> {
 }
 
 function registerServerMode(pi: ExtensionAPI): void {
+	let fleet: FleetManager | undefined;
+	const getFleet = (): FleetManager => {
+		fleet ??= new FleetManager();
+		return fleet;
+	};
+	const text = (value: string) => ({
+		content: [{ type: "text" as const, text: value }],
+		details: {} as Record<string, unknown>,
+	});
+	const updateStatus = (ctx: { hasUI: boolean; ui: { setStatus(k: string, v?: string): void } }) => {
+		if (!ctx.hasUI || !fleet) return;
+		const instances = fleet.status();
+		const running = instances.filter((entry) => entry.state === "running").length;
+		ctx.ui.setStatus("fleet", instances.length === 0 ? undefined : `fleet: ${running}/${instances.length} running`);
+	};
+
+	pi.on("session_shutdown", async () => {
+		await fleet?.close();
+		fleet = undefined;
+	});
+
 	pi.registerCommand("fleet", {
-		description: "pi-fleet status (server mode arrives in Phase 2)",
+		description: "Show pi-fleet status",
 		handler: async (_args, ctx) => {
-			if (ctx.hasUI) {
-				ctx.ui.notify("pi-fleet: worker mode inactive (no PI_FLEET_* env); server mode lands in Phase 2", "info");
-			}
+			const instances = fleet?.status() ?? [];
+			const summary =
+				instances.length === 0
+					? "no workers"
+					: instances
+							.map((entry) => `${entry.instanceId} ${entry.host} ${entry.bundle} ${entry.state}${entry.settled ? " settled" : ""}`)
+							.join("\n");
+			if (ctx.hasUI) ctx.ui.notify(`pi-fleet:\n${summary}`, "info");
+		},
+	});
+
+	pi.registerTool({
+		name: "remote_spawn",
+		label: "Remote Spawn",
+		description:
+			"Spawn a pi worker on a fleet agent machine (tailnet). Returns the instanceId. " +
+			"The worker provisions itself from this server's bundle registry.",
+		promptSnippet: "Spawn a pi worker on a remote machine",
+		promptGuidelines: [
+			"Use remote_spawn to delegate work to another machine, then remote_prompt to task it.",
+		],
+		parameters: Type.Object({
+			host: Type.String({ description: "Agent tailnet IP or hostname" }),
+			cwd: Type.String({ description: "Working directory on the remote machine" }),
+			bundle: Type.Optional(Type.String({ description: "Bundle name (default: default)" })),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			const tracked = await getFleet().spawn({
+				host: params.host,
+				cwd: params.cwd,
+				bundle: params.bundle ?? "default",
+			});
+			updateStatus(ctx);
+			return {
+				...text(`spawned ${tracked.instanceId} on ${tracked.host} (bundle ${tracked.bundle})`),
+				details: { instanceId: tracked.instanceId },
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "remote_prompt",
+		label: "Remote Prompt",
+		description:
+			"Send a prompt to a fleet worker. wait=true (default) blocks until the worker settles " +
+			"and returns its final assistant message; wait=false returns immediately (poll with remote_output).",
+		promptSnippet: "Task a remote pi worker and get its result",
+		parameters: Type.Object({
+			instanceId: Type.String(),
+			message: Type.String(),
+			wait: Type.Optional(Type.Boolean()),
+			timeoutSeconds: Type.Optional(Type.Number({ description: "Max wait (default 600)" })),
+		}),
+		async execute(_id, params, signal, onUpdate) {
+			const manager = getFleet();
+			await manager.prompt(params.instanceId, params.message);
+			if (params.wait === false) return text(`prompt sent to ${params.instanceId} (not waiting)`);
+			onUpdate?.(text("worker running..."));
+			await manager.waitSettled(params.instanceId, (params.timeoutSeconds ?? 600) * 1000, signal);
+			const result = manager.get(params.instanceId)?.lastAssistant ?? "(no assistant output captured)";
+			return text(result.length > 20_000 ? `${result.slice(0, 20_000)}\n[truncated]` : result);
+		},
+	});
+
+	pi.registerTool({
+		name: "remote_output",
+		label: "Remote Output",
+		description: "Inspect a fleet worker: state, settled flag, last assistant message, recent event types.",
+		parameters: Type.Object({ instanceId: Type.String() }),
+		async execute(_id, params) {
+			const { instance, recentEventTypes } = getFleet().output(params.instanceId);
+			return text(
+				[
+					`instance ${instance.instanceId} on ${instance.host} (${instance.bundle})`,
+					`state: ${instance.state}${instance.settled ? ", settled" : ", busy"}`,
+					`recent events: ${recentEventTypes.join(", ") || "none"}`,
+					`last assistant message:`,
+					instance.lastAssistant ?? "(none)",
+				].join("\n"),
+			);
+		},
+	});
+
+	pi.registerTool({
+		name: "remote_abort",
+		label: "Remote Abort",
+		description: "Abort a fleet worker's current run (keeps the worker alive).",
+		parameters: Type.Object({ instanceId: Type.String() }),
+		async execute(_id, params) {
+			await getFleet().abort(params.instanceId);
+			return text(`abort sent to ${params.instanceId}`);
+		},
+	});
+
+	pi.registerTool({
+		name: "remote_stop",
+		label: "Remote Stop",
+		description: "Gracefully stop a fleet worker (abort, close stdin, kill after grace).",
+		parameters: Type.Object({ instanceId: Type.String() }),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			const result = await getFleet().stop(params.instanceId);
+			updateStatus(ctx);
+			return text(`stopped ${params.instanceId}${result.forced ? " (forced)" : ""}`);
+		},
+	});
+
+	pi.registerTool({
+		name: "fleet_status",
+		label: "Fleet Status",
+		description: "List all fleet workers: instanceId, host, bundle, state, settled.",
+		parameters: Type.Object({}),
+		async execute() {
+			const instances = getFleet().status();
+			if (instances.length === 0) return text("no workers");
+			return text(
+				instances
+					.map(
+						(entry) =>
+							`${entry.instanceId} host=${entry.host} bundle=${entry.bundle} state=${entry.state} ${entry.settled ? "settled" : "busy"}`,
+					)
+					.join("\n"),
+			);
 		},
 	});
 }
