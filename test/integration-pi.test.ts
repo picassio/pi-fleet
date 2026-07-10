@@ -105,10 +105,13 @@ describe.skipIf(!available)("Phase 1 exit: real pi worker provisions from a loca
 					},
 				);
 
+				// A globally installed pi-fleet may load alongside the -e copy,
+				// suffixing duplicate command names (bundle-hello:1).
 				const names = data.commands.map((command) => command.name);
-				expect(names).toContain("bundle-hello"); // hosted bundle extension (AC-1.2)
-				expect(names).toContain("skill:greet"); // synced bundle skill (AC-1.1)
-				expect(names).toContain("fleet-use"); // Phase 4 rebundle command present in worker mode
+				const has = (base: string) => names.some((name) => name === base || name.startsWith(`${base}:`));
+				expect(has("bundle-hello"), "hosted bundle extension (AC-1.2)").toBe(true);
+				expect(has("skill:greet"), "synced bundle skill (AC-1.1)").toBe(true);
+				expect(has("fleet-use"), "Phase 4 rebundle command").toBe(true);
 			} finally {
 				child.kill();
 			}

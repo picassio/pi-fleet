@@ -10,7 +10,10 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { hostname } from "node:os";
 import { FleetManager } from "./server/fleet.ts";
+import { startAgentDaemon, AGENT_DEFAULT_PORT, type RunningAgent } from "./agent/daemon.ts";
+import { Tailscale } from "./core/tailscale.ts";
 import { loadBundleExtensions, type BundleExtensionLoadResult } from "./worker/host.ts";
 import {
 	parseWorkerEnv,
@@ -230,6 +233,48 @@ function registerServerMode(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", async () => {
 		await fleet?.close();
 		fleet = undefined;
+	});
+
+	let agentRunning: RunningAgent | undefined;
+	pi.registerCommand("fleet-agent", {
+		description: "Turn this pi session into a fleet agent: /fleet-agent <pinned-server-machine> (again to stop)",
+		handler: async (args, ctx) => {
+			if (agentRunning) {
+				await agentRunning.close();
+				agentRunning = undefined;
+				if (ctx.hasUI) {
+					ctx.ui.setStatus("fleet-agent", undefined);
+					ctx.ui.notify("fleet-agent: stopped (workers stopped)", "info");
+				}
+				return;
+			}
+			const pinnedServer = args?.trim();
+			if (!pinnedServer) {
+				if (ctx.hasUI) ctx.ui.notify("usage: /fleet-agent <pinned-server-machine-name>", "error");
+				return;
+			}
+			const tailscale = new Tailscale();
+			const host = await tailscale.ip4();
+			agentRunning = await startAgentDaemon({
+				host,
+				port: AGENT_DEFAULT_PORT,
+				machine: hostname(),
+				pinnedServer,
+				whois: (ip) => tailscale.whois(ip),
+			});
+			if (ctx.hasUI) {
+				ctx.ui.setStatus("fleet-agent", `agent: ${host}:${agentRunning.port} pinned ${pinnedServer}`);
+				ctx.ui.notify(
+					`fleet-agent serving on ${host}:${agentRunning.port} (pinned to ${pinnedServer}). Workers live while this pi session runs; use the bootstrap script for a durable service.`,
+					"info",
+				);
+			}
+		},
+	});
+
+	pi.on("session_shutdown", async () => {
+		await agentRunning?.close();
+		agentRunning = undefined;
 	});
 
 	pi.registerCommand("fleet-follow", {
