@@ -10,7 +10,14 @@
  */
 import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildPiRpcInvocation, resolvePiCommand } from "../core/spawn.ts";
+
+/** The fleet extension entry the agent injects into every worker via `-e`. */
+export function fleetExtensionEntry(): string {
+	return join(dirname(fileURLToPath(import.meta.url)), "..", "index.ts");
+}
 
 export interface SpawnRequest {
 	cwd: string;
@@ -58,7 +65,8 @@ export class InstanceSupervisor {
 			this.options.resolveCommand ??
 			(async () => {
 				const resolved = await resolvePiCommand();
-				return buildPiRpcInvocation(resolved);
+				// Workers need no pi-fleet install: the agent injects its own copy.
+				return buildPiRpcInvocation(resolved, ["-e", fleetExtensionEntry()]);
 			});
 		const { command, args } = await resolve();
 		const instanceId = `i-${randomBytes(6).toString("hex")}`;
