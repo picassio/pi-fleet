@@ -1,0 +1,27 @@
+{
+  "name": "pi-fleet",
+  "version": "0.0.1",
+  "description": "Cross-device orchestration extension for pi: server-owned bundles, tailnet transport, pi as fleet orchestrator",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/picassio/pi-fleet.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test"
+  },
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3",
+    "vitest": "4.1.9"
+  }
+}
