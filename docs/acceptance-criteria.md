@@ -62,6 +62,22 @@ Grouped by phase (see [roadmap](roadmap.md)). Each criterion is testable; unit/i
 
 **AC-3.8 Orchestrator restart.** Restarting the server pi while a worker runs: after restart and `/serve`, `fleet_status` re-lists the worker and `remote_output` returns its buffered/settled output via snapshot catch-up.
 
+## Phase 3.5 — Sessions: baselines & registry
+
+**AC-3.5.1 Baseline creation.** `remote_baseline(host, cwd)` produces a session that is primed (priming prompt ran), compacted, named `baseline:<repo>`, registered with `kind: baseline`, pinned, and stamped with the repo's git HEAD.
+
+**AC-3.5.2 Clone-on-spawn.** `remote_spawn(..., fromSession: baseline)` runs the task in a **new** session file whose `parentSession` is the baseline; the baseline file's bytes are unchanged after the task completes; the clone's first context includes the baseline's compacted summary.
+
+**AC-3.5.3 Pin protection.** `remote_resume(baseline, { mode: "attach" })` is refused for pinned sessions with a named error; `mode: "clone"` succeeds.
+
+**AC-3.5.4 Registry reconciliation.** After an agent restart or reconnect, `sessions_report` brings the server projection to exact agreement with `SessionManager.listAll()` on the agent (no ghosts, no missing sessions), including sessions created while the server was offline.
+
+**AC-3.5.5 Search locality.** `session_search` returns matching session refs + snippet hits; full JSONL content never crosses the wire (verified by frame inspection in tests).
+
+**AC-3.5.6 Stale baseline.** Advancing the worker repo past the baseline's recorded git HEAD flags `baseline_stale` in `fleet_status`; spawning from a stale baseline succeeds but the spawn result carries the staleness warning.
+
+**AC-3.5.7 Cursor catch-up.** After a server restart mid-task, reattach uses `get_entries { since: <last seen id> }` and receives exactly the entries emitted during the outage — no duplicates, no gaps (verified against the worker's session file).
+
 ## Phase 4 — Runtime control
 
 **AC-4.1 Hot rebundle.** `/fleet-use rust-reviewer` on a running worker: session history is preserved, and post-reload the worker's skills/tools match the new bundle's manifest.

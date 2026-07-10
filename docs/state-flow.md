@@ -196,7 +196,47 @@ sequenceDiagram
     end
 ```
 
-## 8. Runtime rebundle (`/fleet-use`, AC-4.1)
+## 8. Sequence: baseline creation and clone-on-spawn
+
+```mermaid
+sequenceDiagram
+    participant S as server pi (LLM)
+    participant A as fleet agent
+    participant B as baseline worker pi
+    participant T as task worker pi
+
+    S->>A: spawn {cwd: ~/projects/api, bundle: default}
+    A->>B: exec pi --mode rpc
+    S->>B: prompt (bundle priming prompt: explore repo, conventions)
+    B-->>S: agent_settled
+    S->>B: compact
+    S->>B: set_session_name "baseline:api"
+    S->>S: registry: {kind: baseline, pinned, gitHead: abc123}
+    S->>A: stop {instanceId}  # baseline session file remains on disk
+
+    Note over S: later: task arrives
+    S->>A: spawn {cwd, bundle, fromSession: "baseline:api"}
+    A->>T: exec pi --mode rpc --session <baseline.jsonl>
+    S->>T: clone            # duplicate branch -> NEW session file
+    T-->>S: cloned {newSessionPath}
+    S->>S: registry: {kind: task, name: "task:t42:fix-tests", parentSession: baseline}
+    S->>T: prompt (task)    # baseline file never written
+```
+
+## 9. Session registry reconciliation
+
+```mermaid
+stateDiagram-v2
+    [*] --> stale_projection : server (re)connects to agent
+    stale_projection --> reconciling : sessions_report received
+    reconciling --> synced : projection == agent SessionManager.listAll()
+    synced --> synced : incremental sessions_report on change
+    synced --> catch_up : reattach to live session
+    catch_up --> synced : get_entries {since: last seen id} applied
+    synced --> stale_projection : connection lost
+```
+
+## 10. Runtime rebundle (`/fleet-use`, AC-4.1)
 
 ```mermaid
 stateDiagram-v2

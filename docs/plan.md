@@ -61,6 +61,8 @@ Control plane (server ⇄ agent):
 | `task_done_ack` | s→a | ack; agent removes the outbox entry |
 | `task_accept` | s→a | verdict after verification: `{ taskId, disposition: "stop" \| "keep_idle" }` |
 | `task_reject` | s→a | verdict with revision feedback: `{ taskId, feedback }` → delivered to the same worker session as a new prompt |
+| `sessions_report` | a→s | session registry sync: metadata for all sessions on the agent's machine (on connect + on change) |
+| `session_search` / `session_hits` | s→a, a→s | content search runs on the agent (local grep over JSONL); only hits cross the wire |
 
 Worker RPC payloads inside `rpc`/`event` are pi's native RPC commands/events — pi-fleet does not invent a second session protocol.
 
@@ -78,7 +80,22 @@ Raw RPC events are the live view; task completion is an explicit, reliable layer
 2. **At-least-once delivery.** The agent persists `task_done` in a disk-backed outbox (`~/.pi/agent/fleet-agent/outbox/`), retries with backoff until `task_done_ack`, and replays unacked entries on reconnect. The server dedupes by `(instanceId, taskId, seq)`, so duplicates are harmless. Notifications survive server restarts, sleeping laptops, and agent restarts.
 3. **Waking the orchestrator.** On `task_done` the server extension injects a `fleet-task-done` custom message into the server pi session with `{ triggerTurn: true, deliverAs: "followUp" }`. If the server pi is idle, the orchestrator LLM wakes and reviews autonomously; if busy, review queues as a follow-up. The widget and a `ctx.ui.notify` update fire regardless.
 4. **Verification.** The worker parks in `awaiting_review` (process alive, context intact). The server LLM verifies using existing tools: `remote_output` for the transcript, `remote_prompt` to demand evidence (run tests, show `git diff --stat`). It then calls `remote_accept` or `remote_reject(feedback)` tools, which emit the verdict frames.
-5. **Revision loop.** `task_reject` feedback is delivered to the same worker session as a new prompt — no context loss. The loop is capped (`maxRejects`, default 3); exceeding it moves the task to `escalated`, which notifies the human instead of consuming more tokens.
+5. **Revision loop (session-tree aware).** `task_reject` feedback is delivered to the same worker session as a new prompt — no context loss; the session tree (`get_tree`) records every attempt and labels mark accepted checkpoints. The loop is capped (`maxRejects`, default 3); exceeding it moves the task to `escalated`, which notifies the human instead of consuming more tokens.
+
+## Session persistence, baselines, and the registry
+
+pi natively persists worker sessions (JSONL, per-cwd) and exposes `switch_session`, `fork`, `clone`, `get_fork_messages`, `get_tree`, `get_entries { since }`, `set_session_name`, and `new_session { parentSession }` over RPC. pi-fleet adds a fleet-level registry and a baseline convention:
+
+**Baseline pattern (warm context, then work):**
+1. `remote_baseline(host, cwd)` spawns a worker, runs the bundle's priming prompt (explore repo, read conventions), runs `compact` to densify, names it `baseline:<repo>`, registers it as `kind: baseline`, **pinned**.
+2. Every `remote_spawn(..., fromSession: baseline)` attaches to the baseline file and immediately `clone`s — the task runs in a fresh copy; the baseline is never written.
+3. Registry stores git HEAD at priming time; `fleet_status` flags `baseline_stale` when the repo moves past it → re-prime.
+
+**Registry:** the agent is the source of truth (sessions live on its disk); the server keeps a projection reconciled from `sessions_report` on every connect. Entry shape: `{ sessionId, path, name, machine, cwd, kind: baseline|task|scratch, pinned, parentSession, bundle+hash, gitHead, taskIds, labels, updatedAt, stats, attachedInstanceId? }`. Task sessions are auto-named `task:<taskId>:<slug>` with `parentSession` pointing at their baseline, so lineage is always traceable.
+
+**Resume semantics:** `remote_resume(sessionRef, { mode })` defaults to `clone` (continuing work never mutates the historical record); `attach` is allowed only for unpinned sessions. Discovery: `fleet_sessions(filter)` tool for the LLM, `/fleet-sessions` interactive picker for the human, `session_search` for content queries.
+
+**Catch-up:** the server tracks the last seen entry id per session and uses `get_entries { since }` as a durable cursor — reattach after any restart fetches exactly the missed entries, no full-snapshot cost.
 
 ## Bundle manifest (v1)
 

@@ -50,6 +50,17 @@ Phased so every phase ends in something usable on its own. Later phases never re
 
 **Exit:** one natural-language prompt on the server delegates a task to a remote worker and reports the result.
 
+## Phase 3.5 — Sessions: baselines & registry
+
+**Goal:** warm-context task starts and fleet-wide session discovery.
+
+- Session registry: `sessions_report` reconciliation, server-side projection, auto-naming (`baseline:<repo>`, `task:<taskId>:<slug>`), `parentSession` lineage
+- Baseline workflow: `remote_baseline` (prime → compact → name → pin), clone-on-spawn via `fromSession`, `baseline_stale` detection against git HEAD
+- `remote_resume` (clone-by-default, attach for unpinned), `fleet_sessions` tool, `/fleet-sessions` picker, `session_search` (agent-local grep)
+- Durable event cursor: reattach catch-up via `get_entries { since }`
+
+**Exit:** two tasks spawned from one compacted baseline start with the repo already "understood"; after a server restart, `/fleet-sessions` finds and resumes the right session.
+
 ## Phase 4 — Runtime control & custom bundles
 
 **Goal:** live retargeting without respawn.
