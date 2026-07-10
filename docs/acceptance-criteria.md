@@ -54,6 +54,14 @@ Grouped by phase (see [roadmap](roadmap.md)). Each criterion is testable; unit/i
 
 **AC-3.4 Widget accuracy.** The fleet widget reflects worker state transitions (spawning → provisioning → idle → running → settled) within 2 s of the underlying event.
 
+**AC-3.4a File service scope.** `fs_read`/`fs_list`/`fs_grep`/`fs_diff` resolve paths inside the instance cwd only: absolute paths outside it, `..` traversal, and symlinks pointing outside are refused with a named error; `fsAccess: off` disables the service for that machine.
+
+**AC-3.4b Zero worker involvement.** A `remote_read`/`remote_diff` during review adds no entries to the worker's session file and triggers no worker LLM call (verified by comparing session bytes before/after).
+
+**AC-3.4c Image review.** `remote_read` of a PNG in the worker cwd returns base64+mime, surfaces as `ImageContent` in the server tool result, and renders in the server TUI; files over the cap are refused with size info instead of truncated silently.
+
+**AC-3.4d Truncation parity.** Text `remote_read` obeys pi's 50 KB / 2000-line truncation with working `offset`/`limit` paging; a 200k-line file is readable in pages without context overflow.
+
 **AC-3.5 Durable completion.** With the server pi stopped, a worker finishing its task causes the agent to persist `task_done` in the outbox; after the server restarts and reconnects, the notification is delivered exactly once (duplicates deduped by `taskId`+`seq`) and the orchestrator LLM is woken via the injected `fleet-task-done` message.
 
 **AC-3.6 Ack contract.** `task_done` entries remain in the agent outbox across agent restarts until `task_done_ack` is received; after ack, the entry is gone and is never re-sent.

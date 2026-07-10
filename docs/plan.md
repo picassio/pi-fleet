@@ -62,6 +62,7 @@ Control plane (server ⇄ agent):
 | `task_accept` | s→a | verdict after verification: `{ taskId, disposition: "stop" \| "keep_idle" }` |
 | `task_reject` | s→a | verdict with revision feedback: `{ taskId, feedback }` → delivered to the same worker session as a new prompt |
 | `sessions_report` | a→s | session registry sync: metadata for all sessions on the agent's machine (on connect + on change) |
+| `fs_read` / `fs_list` / `fs_grep` / `fs_diff` | s→a | read-only file service answered by the agent (no worker LLM involved): file content (text, or base64+mime for binary/image), dir listing, grep, git diff from the instance cwd; chunked responses, ~5 MB cap |
 | `session_search` / `session_hits` | s→a, a→s | content search runs on the agent (local grep over JSONL); only hits cross the wire |
 
 Worker RPC payloads inside `rpc`/`event` are pi's native RPC commands/events — pi-fleet does not invent a second session protocol.
@@ -79,7 +80,7 @@ Raw RPC events are the live view; task completion is an explicit, reliable layer
 1. **Completion detection.** The agent watches each worker's event stream. `agent_settled` after a tracked `remote_prompt` closes the task and produces a `task_done` frame with a result digest (final assistant message, turn/tool counts, files changed).
 2. **At-least-once delivery.** The agent persists `task_done` in a disk-backed outbox (`~/.pi/agent/fleet-agent/outbox/`), retries with backoff until `task_done_ack`, and replays unacked entries on reconnect. The server dedupes by `(instanceId, taskId, seq)`, so duplicates are harmless. Notifications survive server restarts, sleeping laptops, and agent restarts.
 3. **Waking the orchestrator.** On `task_done` the server extension injects a `fleet-task-done` custom message into the server pi session with `{ triggerTurn: true, deliverAs: "followUp" }`. If the server pi is idle, the orchestrator LLM wakes and reviews autonomously; if busy, review queues as a follow-up. The widget and a `ctx.ui.notify` update fire regardless.
-4. **Verification.** The worker parks in `awaiting_review` (process alive, context intact). The server LLM verifies using existing tools: `remote_output` for the transcript, `remote_prompt` to demand evidence (run tests, show `git diff --stat`). It then calls `remote_accept` or `remote_reject(feedback)` tools, which emit the verdict frames.
+4. **Verification.** The worker parks in `awaiting_review` (process alive, context intact). The server LLM verifies via the **file service first** — `remote_diff` (git diff from the worker cwd), `remote_read` / `remote_grep` for suspicious files, image artifacts rendered directly into the orchestrator's context — none of which involves the worker's LLM or session. `remote_prompt` is reserved for evidence that requires execution (run the test suite). It then calls `remote_accept` or `remote_reject(feedback)` tools, which emit the verdict frames.
 5. **Revision loop (session-tree aware).** `task_reject` feedback is delivered to the same worker session as a new prompt — no context loss; the session tree (`get_tree`) records every attempt and labels mark accepted checkpoints. The loop is capped (`maxRejects`, default 3); exceeding it moves the task to `escalated`, which notifies the human instead of consuming more tokens.
 
 ## Session persistence, baselines, and the registry
@@ -120,6 +121,18 @@ pi natively persists worker sessions (JSONL, per-cwd) and exposes `switch_sessio
 ```
 
 Sync algorithm: fetch manifest → compare `bundleHash` to cache dirs → fetch only missing/changed files into a temp dir → validate every path (POSIX, no `..`, no absolute, no reserved names, no case collisions) → atomic rename to `~/.pi/agent/fleet-cache/<bundleHash>/` → record provenance.
+
+## Remote file access (review channel)
+
+The server can inspect worker files without involving the worker's LLM: `fs_*` frames are answered by the agent directly, so reviews cost zero worker tokens and never pollute worker session context.
+
+Server-side tools: `remote_diff(instanceId, {ref?, staged?, stat?})` (primary review primitive), `remote_read(instanceId, path, {offset?, limit?})`, `remote_ls`, `remote_grep`. Text content flows through pi's standard truncation (50 KB / 2000 lines, offset/limit paging). Binary/image files return base64+mime and surface as `ImageContent` in the tool result, so the orchestrator model sees remote screenshots/design assets and the TUI renders them.
+
+Rules:
+- **Scope:** paths resolve inside the instance's cwd on the agent (`realpath` containment, symlink escapes rejected, Phase-0 path-safety module reused). Per-machine config `fsAccess: workspace | off`; no broader tier.
+- **Read-only:** there is no `fs_write`. Mutations belong to workers, inside session logs, where they are auditable.
+- **Policy:** file service requires machine policy ≥ `allow` (view-class access).
+- **Limits:** chunked transfer, ~5 MB hard cap per file, image size hinting for downscale.
 
 ## Configuration layers & TUI settings
 

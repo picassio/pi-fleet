@@ -43,6 +43,7 @@ Phased so every phase ends in something usable on its own. Later phases never re
 **Goal:** the local pi's model drives the fleet.
 
 - Tools: `remote_spawn`, `remote_prompt` (blocking-until-settled and async variants), `remote_output`, `remote_abort`, `remote_stop`, `remote_accept`, `remote_reject`, `fleet_status`
+- Review file channel: `remote_diff`, `remote_read` (text + images as `ImageContent`), `remote_ls`, `remote_grep` — agent-answered, zero worker tokens, cwd-scoped, read-only
 - Task completion layer: `task_done` with agent-side disk outbox (at-least-once + ack + dedupe), orchestrator wake-up via injected `fleet-task-done` message (`triggerTurn`), `awaiting_review` → verify → accept/reject revision loop with `maxRejects` escalation
 - Live worker events surfaced through `onUpdate()` during blocking calls
 - `setWidget("fleet", ...)` dashboard: workers, states, current activity
