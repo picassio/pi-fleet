@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { InstanceSupervisor, type SupervisorOptions } from "./instances.ts";
 import { fsDiff, fsGrep, fsList, fsRead } from "./fsservice.ts";
 import { TaskOutbox } from "./outbox.ts";
+import { searchSessions } from "./sessions.ts";
 
 export const AGENT_DEFAULT_PORT = 9788;
 export const PACKAGE_VERSION = "0.0.1";
@@ -31,6 +32,8 @@ export interface AgentDaemonOptions {
 	outboxDir?: string;
 	/** Refuse spawns beyond this many running instances (AC-3.14). */
 	maxWorkers?: number;
+	/** pi session storage root to search (default ~/.pi/agent/sessions). */
+	sessionsDir?: string;
 	/** Internal: wired by startAgentDaemon to register per-instance budgets. */
 	registerBudget?: (instanceId: string, maxCost: number) => void;
 	heartbeatIntervalMs?: number;
@@ -325,6 +328,14 @@ async function dispatch(
 					...(request.id ? { id: request.id } : {}),
 				});
 			}
+			return;
+		}
+		case "session_search": {
+			const hits = await searchSessions(
+				agentOptions.sessionsDir,
+				frame.query,
+			);
+			connection.send({ v: 1, type: "session_hits", hits, ...(frame.id ? { id: frame.id } : {}) });
 			return;
 		}
 		case "fs_read":

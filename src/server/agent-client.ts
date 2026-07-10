@@ -114,6 +114,13 @@ export class AgentClient {
 		throw new Error(`unexpected response: ${response.type}`);
 	}
 
+	/** Content search over the agent machine's pi sessions; only hits cross the wire. */
+	async sessionSearch(query: string): Promise<FrameOf<"session_hits">["hits"]> {
+		const response = await this.request({ v: 1, type: "session_search", query });
+		if (response.type === "session_hits") return response.hits;
+		throw new Error(`unexpected response: ${response.type}`);
+	}
+
 	/** Read-only file service (answered by the agent, not the worker). */
 	async fs(
 		request:

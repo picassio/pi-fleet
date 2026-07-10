@@ -597,6 +597,19 @@ function registerServerMode(pi: ExtensionAPI): void {
 	});
 
 	pi.registerTool({
+		name: "session_search",
+		label: "Session Search",
+		description: "Search pi session content on a fleet machine (grep runs on the agent; only hits return).",
+		parameters: Type.Object({ host: Type.String(), query: Type.String() }),
+		async execute(_id, params) {
+			const client = await getFleet().agent(params.host);
+			const hits = await client.sessionSearch(params.query);
+			if (hits.length === 0) return text("no matches");
+			return text(hits.map((hit) => `${hit.sessionId} (${hit.path}): …${hit.snippet}…`).join("\n"));
+		},
+	});
+
+	pi.registerTool({
 		name: "fleet_status",
 		label: "Fleet Status",
 		description: "List all fleet workers: instanceId, host, bundle, state, settled.",

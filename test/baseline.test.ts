@@ -174,3 +174,33 @@ describe("fleet doctor", () => {
 		expect(lines).toContain("workers: 1 running / 1 tracked");
 	});
 });
+
+describe("AC-3.5.5 session_search", () => {
+	it("greps agent-local session files and returns only hits", async () => {
+		const { mkdir: mk, writeFile: wf } = await import("node:fs/promises");
+		const sessionsDir = await mkdtemp(join(tmpdir(), "pf-sessions-"));
+		await mk(join(sessionsDir, "proj"), { recursive: true });
+		await wf(join(sessionsDir, "proj", "abc123.jsonl"), '{"type":"message","text":"refactor the auth flow"}\n');
+		await wf(join(sessionsDir, "proj", "zzz.jsonl"), '{"type":"message","text":"unrelated"}\n');
+
+		const workerPath = await makeRpcWorker();
+		running = await startAgentDaemon({
+			host: "127.0.0.1",
+			port: 0,
+			machine: "buildbox",
+			pinnedServer: "claude3-10",
+			sessionsDir,
+			whois: async () => ({ machine: "claude3-10", user: "ana@github" }),
+			supervisor: { resolveCommand: async () => ({ command: process.execPath, args: [workerPath] }) },
+		});
+		const client = await AgentClient.connect("127.0.0.1", running.port);
+		try {
+			const hits = await client.sessionSearch("auth flow");
+			expect(hits).toHaveLength(1);
+			expect(hits[0]?.sessionId).toBe("abc123");
+			expect(hits[0]?.snippet).toContain("refactor the auth flow");
+		} finally {
+			client.close();
+		}
+	});
+});
