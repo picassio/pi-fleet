@@ -7,7 +7,9 @@ describe("resolvePiCommand", () => {
 			const resolved = await resolvePiCommand({ platform });
 			expect(resolved.prefixArgs).toEqual([]);
 			// Absolute when pi is findable (this environment has it); bare "pi" fallback otherwise.
-			expect(resolved.command === "pi" || resolved.command.endsWith("/pi")).toBe(true);
+			expect(
+				resolved.command === "pi" || resolved.command.endsWith("/pi") || resolved.command.endsWith("\\pi"),
+			).toBe(true);
 		}
 	});
 
