@@ -14,6 +14,8 @@ export interface AgentClientOptions extends FrameConnectionOptions {
 
 export type AgentEventHandler = (instanceId: string, event: unknown) => void;
 export type TaskDoneHandler = (frame: FrameOf<"task_done">) => void;
+export type ExecOutputHandler = (frame: FrameOf<"exec_output">) => void;
+export type ExecExitHandler = (frame: FrameOf<"exec_exit">) => void;
 
 export class AgentClient {
 	private connection: FrameConnection;
@@ -21,6 +23,8 @@ export class AgentClient {
 	private eventHandler: AgentEventHandler | undefined;
 	private taskDoneHandler: TaskDoneHandler | undefined;
 	private sessionsHandler: ((frame: FrameOf<"sessions_report">) => void) | undefined;
+	private execOutputHandler: ExecOutputHandler | undefined;
+	private execExitHandler: ExecExitHandler | undefined;
 	lastSessionsReport: FrameOf<"sessions_report"> | undefined;
 	private helloFrame: FrameOf<"hello"> | undefined;
 	private helloWaiters: Array<(hello: FrameOf<"hello">) => void> = [];
@@ -148,6 +152,41 @@ export class AgentClient {
 		throw new Error(`unexpected response: ${response.type}`);
 	}
 
+	onExecOutput(handler: ExecOutputHandler): void {
+		this.execOutputHandler = handler;
+	}
+
+	onExecExit(handler: ExecExitHandler): void {
+		this.execExitHandler = handler;
+	}
+
+	async execStart(request: {
+		mode: "shell" | "argv";
+		cwd: string;
+		command?: string;
+		executable?: string;
+		args?: string[];
+		timeoutSeconds?: number;
+	}): Promise<FrameOf<"exec_started">> {
+		const response = await this.request({ v: 1, type: "exec_start", ...request } as Frame);
+		if (response.type === "exec_started") return response;
+		if (response.type === "error") throw new Error(`${response.code}: ${response.message}`);
+		throw new Error(`unexpected response: ${response.type}`);
+	}
+
+	async execAbort(execId: string): Promise<void> {
+		const response = await this.request({ v: 1, type: "exec_abort", execId });
+		if (response.type === "exec_aborted") return;
+		if (response.type === "error") throw new Error(`${response.code}: ${response.message}`);
+		throw new Error(`unexpected response: ${response.type}`);
+	}
+
+	async execList(): Promise<FrameOf<"exec_instances">["executions"]> {
+		const response = await this.request({ v: 1, type: "exec_list" });
+		if (response.type === "exec_instances") return response.executions;
+		throw new Error(`unexpected response: ${response.type}`);
+	}
+
 	/** Fire-and-forget pi RPC command to a worker; replies arrive as events. */
 	rpc(instanceId: string, command: unknown, taskId?: string): void {
 		this.connection.send({
@@ -215,6 +254,14 @@ export class AgentClient {
 		if (frame.type === "task_done") {
 			this.taskDoneHandler?.(frame);
 			this.connection.trySend({ v: 1, type: "task_done_ack", taskId: frame.taskId, seq: frame.seq });
+			return;
+		}
+		if (frame.type === "exec_output") {
+			this.execOutputHandler?.(frame);
+			return;
+		}
+		if (frame.type === "exec_exit") {
+			this.execExitHandler?.(frame);
 			return;
 		}
 		if (frame.id && this.pending.has(frame.id)) {

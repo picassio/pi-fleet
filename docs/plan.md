@@ -66,6 +66,8 @@ Control plane (server ⇄ agent):
 | `ui_request` / `ui_response` | a→s, s→a | forwarded worker extension-UI dialogs (confirm/select/input) for policy auto-answer or human escalation |
 | `fs_read` / `fs_list` / `fs_grep` / `fs_diff` | s→a | read-only file service answered by the agent (no worker LLM involved): file content (text, or base64+mime for binary/image), dir listing, grep, git diff from the instance cwd; chunked responses, ~5 MB cap |
 | `session_search` / `session_hits` | s→a, a→s | content search runs on the agent (local grep over JSONL); only hits cross the wire |
+| `exec_start` / `exec_started` / `exec_output` / `exec_exit` | s→a, a→s | opt-in direct machine command execution with streamed stdout/stderr; no worker or LLM |
+| `exec_abort` / `exec_aborted` / `exec_list` / `exec_instances` | both | terminate process trees and inspect active/recent direct commands |
 
 Worker RPC payloads inside `rpc`/`event` are pi's native RPC commands/events — pi-fleet does not invent a second session protocol.
 
@@ -196,6 +198,7 @@ Server expresses intent; the worker machine's locally held API keys constrain wh
 - Frames are validated at the wire boundary against the same typebox schemas that generate their TypeScript types; malformed frames are rejected with a protocol error, never partially processed.
 - Bundles execute with full permissions on workers: spawns can pin `bundleHash`; workers record loaded bundle name+hash via `appendEntry`; server logs which identity spawned what
 - No secrets in bundles or frames
+- Direct machine execution is disabled by default and requires local `--exec-policy full`; it applies no command, sudo, administrator, absolute-path, or system-tool filtering. The OS account running the agent is the privilege boundary. Optional `--exec-root` values constrain only the initial cwd and are explicitly not a filesystem sandbox. Commands are audited without output; operators must not place secrets in command strings.
 
 ## Cross-platform commitments
 

@@ -31,10 +31,17 @@ describe("AC-2.6 service generators", () => {
 		expect(plist.content).toContain("SuccessfulExit");
 	});
 
-	it("schtasks command runs on logon with limited privileges", () => {
+	it("persists full-exec configuration in service definitions", () => {
+		const executable: ServiceSpec = { ...spec, execPolicy: "full", execRoots: ["/"], maxExecs: 6, execTimeoutSeconds: 900 };
+		expect(generateSystemdUnit(executable).content).toContain("--exec-policy full --exec-root / --max-execs 6 --exec-timeout 900");
+		expect(generateLaunchdPlist(executable).content).toContain("<string>--exec-policy</string>");
+	});
+
+	it("schtasks command defaults limited and supports locally requested highest privileges", () => {
 		const command = generateSchtasksCommand(spec);
 		expect(command).toContain("/sc onlogon");
 		expect(command).toContain("/rl limited");
 		expect(command).toContain("--server claude3-10");
+		expect(generateSchtasksCommand({ ...spec, privileged: true, execPolicy: "full" })).toContain("/rl highest");
 	});
 });

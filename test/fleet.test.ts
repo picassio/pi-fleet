@@ -65,6 +65,7 @@ async function setup(): Promise<FleetManager> {
 		pinnedServer: "claude3-10",
 		instancesFile: join(tmpdir(), `pf-if-${Math.random().toString(36).slice(2)}.json`),
 		whois: async () => ({ machine: "claude3-10", user: "ana@github" }),
+		exec: { enabled: true, auditFile: join(tmpdir(), `pf-exec-audit-${Math.random().toString(36).slice(2)}.jsonl`) },
 		supervisor: {
 			resolveCommand: async () => ({ command: process.execPath, args: [workerPath] }),
 			stopGraceMs: 2_000,
@@ -131,6 +132,21 @@ describe("Phase 3: FleetManager orchestration", () => {
 		const result = await manager.stop(tracked.instanceId);
 		expect(result.forced).toBe(false);
 		expect(manager.get(tracked.instanceId)?.state).toBe("stopped");
+	});
+
+	it("executes directly without spawning a worker and returns output", async () => {
+		const manager = await setup();
+		const execution = await manager.exec({
+			host: "127.0.0.1",
+			mode: "argv",
+			cwd: tmpdir(),
+			executable: process.execPath,
+			args: ["-e", "console.log('direct-fleet')"],
+		});
+		const finished = await manager.waitExec(execution.execId, 10_000);
+		expect(finished.exitCode).toBe(0);
+		expect(finished.stdout.toString()).toContain("direct-fleet");
+		expect(manager.status()).toHaveLength(0);
 	});
 
 	it("unknown instances raise clear errors", async () => {

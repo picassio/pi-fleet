@@ -11,6 +11,21 @@ export interface ServiceSpec {
 	entryPath: string;
 	pinnedServer: string;
 	port: number;
+	execPolicy?: "off" | "full";
+	execRoots?: string[];
+	maxExecs?: number;
+	execTimeoutSeconds?: number;
+	privileged?: boolean;
+}
+
+function serviceArgs(spec: ServiceSpec): string[] {
+	return [
+		"serve", "--server", spec.pinnedServer, "--port", String(spec.port),
+		...(spec.execPolicy === "full" ? ["--exec-policy", "full"] : []),
+		...(spec.execRoots ?? []).flatMap((root) => ["--exec-root", root]),
+		...(spec.maxExecs !== undefined ? ["--max-execs", String(spec.maxExecs)] : []),
+		...(spec.execTimeoutSeconds !== undefined ? ["--exec-timeout", String(spec.execTimeoutSeconds)] : []),
+	];
 }
 
 export function generateSystemdUnit(spec: ServiceSpec): { path: string; content: string } {
@@ -22,7 +37,7 @@ After=network-online.target tailscaled.service
 
 [Service]
 Environment=PATH=${spec.nodePath.substring(0, spec.nodePath.lastIndexOf("/"))}:/usr/local/bin:/usr/bin:/bin
-ExecStart=${spec.nodePath} ${spec.entryPath} serve --server ${spec.pinnedServer} --port ${spec.port}
+ExecStart=${spec.nodePath} ${spec.entryPath} ${serviceArgs(spec).join(" ")}
 Restart=on-failure
 RestartSec=5
 
@@ -44,11 +59,7 @@ export function generateLaunchdPlist(spec: ServiceSpec): { path: string; content
 	<array>
 		<string>${spec.nodePath}</string>
 		<string>${spec.entryPath}</string>
-		<string>serve</string>
-		<string>--server</string>
-		<string>${spec.pinnedServer}</string>
-		<string>--port</string>
-		<string>${spec.port}</string>
+${serviceArgs(spec).map((argument) => `\t\t<string>${argument}</string>`).join("\n")}
 	</array>
 	<key>RunAtLoad</key><true/>
 	<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
@@ -59,6 +70,6 @@ export function generateLaunchdPlist(spec: ServiceSpec): { path: string; content
 }
 
 export function generateSchtasksCommand(spec: ServiceSpec): string {
-	const action = `"${spec.nodePath}" "${spec.entryPath}" serve --server ${spec.pinnedServer} --port ${spec.port}`;
-	return `schtasks /create /tn "pi-fleet-agent" /sc onlogon /rl limited /tr '${action}'`;
+	const action = `"${spec.nodePath}" "${spec.entryPath}" ${serviceArgs(spec).join(" ")}`;
+	return `schtasks /create /tn "pi-fleet-agent" /sc onlogon /rl ${spec.privileged ? "highest" : "limited"} /tr '${action}'`;
 }

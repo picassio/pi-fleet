@@ -3,13 +3,17 @@
 #   curl -fsSL https://raw.githubusercontent.com/picassio/pi-fleet/main/scripts/bootstrap-agent.sh | sh -s -- --server <machine> [--port 9788] [--max-workers 4]
 set -e
 
-SERVER=""; PORT="9788"; MAXW=""; CCPATCH=""
+SERVER=""; PORT="9788"; MAXW=""; CCPATCH=""; EXECFULL=""; EXECROOTS=""; MAXEXECS=""; EXECTIMEOUT=""
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--server) SERVER="$2"; shift 2 ;;
 		--port) PORT="$2"; shift 2 ;;
 		--max-workers) MAXW="$2"; shift 2 ;;
 		--with-cc-patch) CCPATCH="1"; shift ;;
+		--exec-full) EXECFULL="1"; shift ;;
+		--exec-root) EXECROOTS="$EXECROOTS --exec-root $2"; shift 2 ;;
+		--max-execs) MAXEXECS="$2"; shift 2 ;;
+		--exec-timeout) EXECTIMEOUT="$2"; shift 2 ;;
 		*) echo "unknown arg: $1" >&2; exit 1 ;;
 	esac
 done
@@ -34,6 +38,9 @@ PKG="$HOME/.pi/agent/git/github.com/picassio/pi-fleet"
 
 AGENT_ARGS="serve --server $SERVER --port $PORT"
 [ -n "$MAXW" ] && AGENT_ARGS="$AGENT_ARGS --max-workers $MAXW"
+[ -n "$EXECFULL" ] && AGENT_ARGS="$AGENT_ARGS --exec-policy full$EXECROOTS"
+[ -n "$MAXEXECS" ] && AGENT_ARGS="$AGENT_ARGS --max-execs $MAXEXECS"
+[ -n "$EXECTIMEOUT" ] && AGENT_ARGS="$AGENT_ARGS --exec-timeout $EXECTIMEOUT"
 
 if command -v systemctl >/dev/null 2>&1 && [ "$(uname)" = "Linux" ]; then
 	mkdir -p "$HOME/.config/systemd/user"

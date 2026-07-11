@@ -67,6 +67,14 @@ const samples: Frame[] = [
 	},
 	{ v: 1, type: "session_search", query: "auth refactor" },
 	{ v: 1, type: "session_hits", hits: [{ sessionId: "s-1", path: "/s/x.jsonl", snippet: "…auth…" }] },
+	{ v: 1, type: "exec_start", mode: "shell", cwd: "/tmp", command: "uname -a", timeoutSeconds: 30 },
+	{ v: 1, type: "exec_started", execId: "x-1", startedAt: 1770000000000 },
+	{ v: 1, type: "exec_output", execId: "x-1", seq: 0, stream: "stdout", base64: "b2sK" },
+	{ v: 1, type: "exec_exit", execId: "x-1", exitCode: 0, signal: null, timedOut: false, aborted: false, durationMs: 10 },
+	{ v: 1, type: "exec_abort", execId: "x-1" },
+	{ v: 1, type: "exec_aborted", execId: "x-1" },
+	{ v: 1, type: "exec_list" },
+	{ v: 1, type: "exec_instances", executions: [{ execId: "x-1", mode: "shell", cwd: "/tmp", state: "exited", startedAt: 1, exitCode: 0 }] },
 	{ v: 1, type: "fs_read", instanceId: "i-1", path: "src/index.ts", offset: 100, limit: 50 },
 	{ v: 1, type: "fs_list", instanceId: "i-1", path: "src" },
 	{ v: 1, type: "fs_grep", instanceId: "i-1", pattern: "TODO", glob: "**/*.ts" },
@@ -97,7 +105,8 @@ describe("AC-0.4 frame codec round-trip", () => {
 			"hello", "heartbeat", "error", "spawn", "spawned", "spawn_error", "stop", "stopped",
 			"list", "instances", "rpc", "event", "task_done", "task_done_ack", "task_accept",
 			"task_reject", "deliver", "delivered", "ui_request", "ui_response", "sessions_report",
-			"session_search", "session_hits", "fs_read", "fs_list", "fs_grep", "fs_diff", "fs_result",
+			"session_search", "session_hits", "exec_start", "exec_started", "exec_output", "exec_exit",
+			"exec_abort", "exec_aborted", "exec_list", "exec_instances", "fs_read", "fs_list", "fs_grep", "fs_diff", "fs_result",
 		]) {
 			expect(seen.has(type as Frame["type"]), type).toBe(true);
 		}

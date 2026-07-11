@@ -11,6 +11,7 @@ pi (TUI) + pi-fleet [server mode]              pi-fleet agent [daemon]
   LLM fleet tools:                     tailnet     async factory pulls bundle
     remote_spawn / remote_prompt                   resources_discover -> skills
     remote_output / remote_abort                   registerTool / setActiveTools
+    remote_exec / remote_exec_abort                direct Bash/PowerShell/argv (opt-in)
     fleet_status                                   full RPC control channel
 ```
 
@@ -68,6 +69,17 @@ pi install git:github.com/picassio/pi-fleet
 ```
 
 No curl, no scripts — the extension carries everything. For Claude Code subscription auth on workers, also `pi install git:github.com/picassio/pi-cc-patch` on that machine.
+
+### Direct machine control
+
+Direct commands do not use workers or LLM tokens. They are disabled until enabled locally:
+
+```text
+/fleet-agent <server> --exec-full
+/fleet-service <server> --exec-full
+```
+
+Headless equivalent: `pi-fleet-agent serve --server <server> --exec-policy full`. Optional repeatable `--exec-root` values constrain only the command's initial working directory; they are not a filesystem sandbox. Full mode does not filter Bash/PowerShell, absolute paths, `sudo`, administrator operations, or system tools. Commands receive the permissions of the OS account running the agent. Use a privileged service account only when full machine administration is intended. See [Remote execution plan](docs/remote-exec-plan.md).
 
 <details><summary>Headless bootstrap (optional, for machines where you never open pi)</summary>
 

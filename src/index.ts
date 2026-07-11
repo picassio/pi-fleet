@@ -148,6 +148,22 @@ export default async function piFleet(pi: ExtensionAPI): Promise<void> {
 }
 
 function registerServerMode(pi: ExtensionAPI): void {
+	const parseAgentArgs = (raw: string | undefined) => {
+		const tokens = (raw ?? "").trim().split(/\s+/).filter(Boolean);
+		const value = (name: string) => {
+			const index = tokens.indexOf(name);
+			return index >= 0 ? tokens[index + 1] : undefined;
+		};
+		const values = (name: string) => tokens.flatMap((token, index) => token === name && tokens[index + 1] ? [tokens[index + 1] as string] : []);
+		return {
+			pinnedServer: tokens[0],
+			execFull: tokens.includes("--exec-full"),
+			execRoots: values("--exec-root"),
+			maxExecs: value("--max-execs"),
+			execTimeout: value("--exec-timeout"),
+			privileged: tokens.includes("--privileged"),
+		};
+	};
 	let fleet: FleetManager | undefined;
 	let followId: string | undefined;
 	const followLines: string[] = [];
@@ -244,9 +260,10 @@ function registerServerMode(pi: ExtensionAPI): void {
 	pi.registerCommand("fleet-service", {
 		description: "Install + start the durable fleet agent service on this machine: /fleet-service <pinned-server>",
 		handler: async (args, ctx) => {
-			const pinnedServer = args?.trim();
+			const parsed = parseAgentArgs(args);
+			const pinnedServer = parsed.pinnedServer;
 			if (!pinnedServer) {
-				if (ctx.hasUI) ctx.ui.notify("usage: /fleet-service <pinned-server-machine-name>", "error");
+				if (ctx.hasUI) ctx.ui.notify("usage: /fleet-service <server> [--exec-full] [--exec-root PATH] [--privileged]", "error");
 				return;
 			}
 			const spec = {
@@ -254,6 +271,11 @@ function registerServerMode(pi: ExtensionAPI): void {
 				entryPath: join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "pi-fleet-agent.mjs"),
 				pinnedServer,
 				port: AGENT_DEFAULT_PORT,
+				execPolicy: parsed.execFull ? "full" as const : "off" as const,
+				execRoots: parsed.execRoots,
+				...(parsed.maxExecs ? { maxExecs: Number(parsed.maxExecs) } : {}),
+				...(parsed.execTimeout ? { execTimeoutSeconds: Number(parsed.execTimeout) } : {}),
+				privileged: parsed.privileged,
 			};
 			const run = (cmd: string, cmdArgs: string[]) =>
 				new Promise<void>((resolvePromise, rejectPromise) => {
@@ -277,8 +299,9 @@ function registerServerMode(pi: ExtensionAPI): void {
 					if (ctx.hasUI) ctx.ui.notify(`fleet service installed + started (launchd, pinned ${pinnedServer})`, "info");
 				} else {
 					// Windows: create + start the per-user onlogon task directly (gap fix #4).
-					const action = `"${spec.nodePath}" "${spec.entryPath}" serve --server ${pinnedServer} --port ${spec.port}`;
-					await run("schtasks", ["/create", "/f", "/tn", "pi-fleet-agent", "/sc", "onlogon", "/rl", "limited", "/tr", action]);
+					const serviceArgs = ["serve", "--server", pinnedServer, "--port", String(spec.port), ...(parsed.execFull ? ["--exec-policy", "full"] : []), ...parsed.execRoots.flatMap((root) => ["--exec-root", root])];
+					const action = `"${spec.nodePath}" "${spec.entryPath}" ${serviceArgs.join(" ")}`;
+					await run("schtasks", ["/create", "/f", "/tn", "pi-fleet-agent", "/sc", "onlogon", "/rl", parsed.privileged ? "highest" : "limited", "/tr", action]);
 					await run("schtasks", ["/run", "/tn", "pi-fleet-agent"]);
 					if (ctx.hasUI) ctx.ui.notify(`fleet service installed + started (scheduled task, pinned ${pinnedServer})`, "info");
 				}
@@ -301,9 +324,10 @@ function registerServerMode(pi: ExtensionAPI): void {
 				}
 				return;
 			}
-			const pinnedServer = args?.trim();
+			const parsed = parseAgentArgs(args);
+			const pinnedServer = parsed.pinnedServer;
 			if (!pinnedServer) {
-				if (ctx.hasUI) ctx.ui.notify("usage: /fleet-agent <pinned-server-machine-name>", "error");
+				if (ctx.hasUI) ctx.ui.notify("usage: /fleet-agent <server> [--exec-full] [--exec-root PATH]", "error");
 				return;
 			}
 			const tailscale = new Tailscale();
@@ -315,6 +339,12 @@ function registerServerMode(pi: ExtensionAPI): void {
 				machine: hostname(),
 				pinnedServer,
 				whois: (ip) => tailscale.whois(ip),
+				exec: {
+					enabled: parsed.execFull,
+					roots: parsed.execRoots,
+					...(parsed.maxExecs ? { maxConcurrent: Number(parsed.maxExecs) } : {}),
+					...(parsed.execTimeout ? { defaultTimeoutSeconds: Number(parsed.execTimeout) } : {}),
+				},
 			});
 			if (ctx.hasUI) {
 				ctx.ui.setStatus("fleet-agent", `agent: ${host}:${agentRunning.port} pinned ${pinnedServer}`);
@@ -392,6 +422,101 @@ function registerServerMode(pi: ExtensionAPI): void {
 							.map((entry) => `${entry.instanceId} ${entry.host} ${entry.bundle} ${entry.state}${entry.settled ? " settled" : ""}`)
 							.join("\n");
 			if (ctx.hasUI) ctx.ui.notify(`pi-fleet:\n${summary}`, "info");
+		},
+	});
+
+	const formatExec = (execution: {
+		execId: string;
+		state: string;
+		stdout: Buffer;
+		stderr: Buffer;
+		truncated: boolean;
+		exitCode?: number | null;
+		signal?: string | null;
+		timedOut?: boolean;
+		aborted?: boolean;
+		durationMs?: number;
+	}) => {
+		const value = [
+		`execution ${execution.execId}: ${execution.state}`,
+		...(execution.state === "exited" ? [`exitCode=${execution.exitCode ?? "null"} signal=${execution.signal ?? "none"} timedOut=${execution.timedOut ?? false} aborted=${execution.aborted ?? false} durationMs=${execution.durationMs ?? 0}`] : []),
+		`stdout:\n${execution.stdout.toString("utf8") || "(empty)"}`,
+		`stderr:\n${execution.stderr.toString("utf8") || "(empty)"}`,
+		...(execution.truncated ? ["[output truncated to retained tail]"] : []),
+		].join("\n");
+		const lines = value.split("\n");
+		const lineBounded = lines.length > 2_000 ? `[tool output limited to last 2000 lines]\n${lines.slice(-2_000).join("\n")}` : value;
+		return lineBounded.length > 50_000 ? `[tool output limited to last 50000 characters]\n${lineBounded.slice(-50_000)}` : lineBounded;
+	};
+
+	pi.registerTool({
+		name: "remote_exec",
+		label: "Remote Exec",
+		description: "Execute a direct argv command or Bash/PowerShell command on an exec-enabled fleet agent. No worker or LLM is used. Full mode permits sudo/admin operations allowed by the agent OS account.",
+		promptSnippet: "Execute a deterministic command directly on a remote fleet machine",
+		parameters: Type.Object({
+			host: Type.String({ description: "Agent tailnet IP or hostname" }),
+			cwd: Type.String({ description: "Absolute working directory on the remote machine" }),
+			mode: Type.Optional(Type.Union([Type.Literal("shell"), Type.Literal("argv")])),
+			command: Type.Optional(Type.String({ description: "Bash/PowerShell command for shell mode" })),
+			executable: Type.Optional(Type.String({ description: "Executable for argv mode" })),
+			args: Type.Optional(Type.Array(Type.String())),
+			timeoutSeconds: Type.Optional(Type.Number({ description: "Agent-side timeout (default 300, max 3600)" })),
+			wait: Type.Optional(Type.Boolean({ description: "Wait and return output (default true)" })),
+		}),
+		async execute(_id, params, signal, onUpdate) {
+			const manager = getFleet();
+			const mode = params.mode === "argv" ? "argv" : "shell";
+			const execution = await manager.exec({
+				host: params.host,
+				cwd: params.cwd,
+				mode,
+				...(params.command !== undefined ? { command: params.command } : {}),
+				...(params.executable !== undefined ? { executable: params.executable } : {}),
+				...(params.args !== undefined ? { args: params.args } : {}),
+				...(params.timeoutSeconds !== undefined ? { timeoutSeconds: params.timeoutSeconds } : {}),
+			});
+			if (params.wait === false) return { ...text(`started ${execution.execId} on ${params.host}`), details: { execId: execution.execId } };
+			onUpdate?.(text(`execution ${execution.execId} running...`));
+			try {
+				const finished = await manager.waitExec(execution.execId, ((params.timeoutSeconds ?? 300) + 15) * 1000, signal);
+				return { ...text(formatExec(finished)), details: { execId: finished.execId, exitCode: finished.exitCode } };
+			} catch (error) {
+				if (signal?.aborted) await manager.abortExec(execution.execId).catch(() => {});
+				throw error;
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "remote_exec_output",
+		label: "Remote Exec Output",
+		description: "Inspect current retained stdout/stderr and status for a direct remote execution.",
+		parameters: Type.Object({ execId: Type.String() }),
+		async execute(_id, params) {
+			return text(formatExec(getFleet().execOutput(params.execId)));
+		},
+	});
+
+	pi.registerTool({
+		name: "remote_exec_abort",
+		label: "Remote Exec Abort",
+		description: "Terminate a direct remote command and its process tree.",
+		parameters: Type.Object({ execId: Type.String() }),
+		async execute(_id, params) {
+			await getFleet().abortExec(params.execId);
+			return text(`abort sent to ${params.execId}`);
+		},
+	});
+
+	pi.registerTool({
+		name: "remote_exec_list",
+		label: "Remote Exec List",
+		description: "List active and recent direct command executions on a fleet agent.",
+		parameters: Type.Object({ host: Type.String() }),
+		async execute(_id, params) {
+			const entries = await getFleet().listExec(params.host);
+			return text(entries.length === 0 ? "no executions" : entries.map((entry) => `${entry.execId} ${entry.state} ${entry.mode} cwd=${entry.cwd}${entry.exitCode !== undefined ? ` exit=${entry.exitCode}` : ""}`).join("\n"));
 		},
 	});
 

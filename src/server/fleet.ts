@@ -13,6 +13,7 @@ import { AgentClient } from "./agent-client.ts";
 import { startRegistryServer, type RunningRegistryServer } from "./registry-server.ts";
 import { Tailscale } from "../core/tailscale.ts";
 import { AGENT_DEFAULT_PORT } from "../agent/daemon.ts";
+import type { FrameOf } from "../core/frames.ts";
 
 const EVENT_BUFFER_LIMIT = 300;
 
@@ -32,6 +33,23 @@ export interface TrackedInstance {
 	settled: boolean;
 	lastAssistant: string | undefined;
 	events: PiEvent[];
+}
+
+export interface TrackedExecution {
+	execId: string;
+	host: string;
+	mode: "shell" | "argv";
+	cwd: string;
+	state: "running" | "exited";
+	stdout: Buffer;
+	stderr: Buffer;
+	truncated: boolean;
+	startedAt: number;
+	exitCode?: number | null;
+	signal?: string | null;
+	timedOut?: boolean;
+	aborted?: boolean;
+	durationMs?: number;
 }
 
 export interface FleetManagerOptions {
@@ -60,6 +78,9 @@ export class FleetManager {
 	private readonly seenTaskDone = new Set<string>();
 	private readonly reconnectTimers = new Map<string, NodeJS.Timeout>();
 	private readonly rpcWaiters = new Map<string, (event: PiEvent) => void>();
+	private readonly executions = new Map<string, TrackedExecution>();
+	private readonly execWaiters = new Map<string, Array<() => void>>();
+	private readonly pendingExecFrames = new Map<string, Array<FrameOf<"exec_output"> | FrameOf<"exec_exit">>>();
 	private baselines = new Map<string, BaselineRecord>();
 	private baselinesLoaded = false;
 	private closed = false;
@@ -82,6 +103,8 @@ export class FleetManager {
 			: await AgentClient.connect(host, port);
 		await client.hello();
 		client.onEvent((instanceId, event) => this.handleEvent(instanceId, event as PiEvent));
+		client.onExecOutput((frame) => this.handleExecFrame(frame));
+		client.onExecExit((frame) => this.handleExecFrame(frame));
 		client.onTaskDone((frame) => {
 			const key = `${frame.instanceId}:${frame.taskId}:${frame.seq}`;
 			if (this.seenTaskDone.has(key)) return;
@@ -309,6 +332,77 @@ export class FleetManager {
 		return client.fs({ ...request, instanceId } as Parameters<AgentClient["fs"]>[0]);
 	}
 
+	async exec(request: {
+		host: string;
+		mode: "shell" | "argv";
+		cwd: string;
+		command?: string;
+		executable?: string;
+		args?: string[];
+		timeoutSeconds?: number;
+	}): Promise<TrackedExecution> {
+		const client = await this.agent(request.host);
+		const hello = await client.hello();
+		if (!hello.capabilities?.includes("exec-v1")) {
+			throw new Error(`agent ${request.host} does not advertise exec-v1; enable --exec-policy full and update/restart it`);
+		}
+		const started = await client.execStart(request);
+		const tracked: TrackedExecution = {
+			execId: started.execId,
+			host: request.host,
+			mode: request.mode,
+			cwd: request.cwd,
+			state: "running",
+			stdout: Buffer.alloc(0),
+			stderr: Buffer.alloc(0),
+			truncated: false,
+			startedAt: started.startedAt,
+		};
+		this.executions.set(started.execId, tracked);
+		for (const frame of this.pendingExecFrames.get(started.execId) ?? []) this.applyExecFrame(tracked, frame);
+		this.pendingExecFrames.delete(started.execId);
+		return tracked;
+	}
+
+	async waitExec(execId: string, timeoutMs: number, signal?: AbortSignal): Promise<TrackedExecution> {
+		const tracked = this.mustGetExec(execId);
+		if (tracked.state === "exited") return tracked;
+		if (signal?.aborted) throw new Error("aborted");
+		await new Promise<void>((resolvePromise, rejectPromise) => {
+			const timer = setTimeout(() => {
+				remove();
+				rejectPromise(new Error(`execution ${execId} did not exit within ${timeoutMs}ms`));
+			}, timeoutMs);
+			const waiter = () => {
+				clearTimeout(timer);
+				signal?.removeEventListener("abort", onAbort);
+				resolvePromise();
+			};
+			const remove = () => this.execWaiters.set(execId, (this.execWaiters.get(execId) ?? []).filter((entry) => entry !== waiter));
+			const onAbort = () => {
+				remove();
+				clearTimeout(timer);
+				rejectPromise(new Error("aborted"));
+			};
+			this.execWaiters.set(execId, [...(this.execWaiters.get(execId) ?? []), waiter]);
+			signal?.addEventListener("abort", onAbort, { once: true });
+		});
+		return this.mustGetExec(execId);
+	}
+
+	execOutput(execId: string): TrackedExecution {
+		return this.mustGetExec(execId);
+	}
+
+	async abortExec(execId: string): Promise<void> {
+		const tracked = this.mustGetExec(execId);
+		await (await this.agent(tracked.host)).execAbort(execId);
+	}
+
+	async listExec(host: string) {
+		return (await this.agent(host)).execList();
+	}
+
 	async abort(instanceId: string): Promise<void> {
 		const tracked = this.mustGet(instanceId);
 		const client = await this.agent(tracked.host);
@@ -370,6 +464,48 @@ export class FleetManager {
 		this.agents.clear();
 		await this.registry?.close();
 		this.registry = undefined;
+	}
+
+	private mustGetExec(execId: string): TrackedExecution {
+		const tracked = this.executions.get(execId);
+		if (!tracked) throw new Error(`unknown execution: ${execId}`);
+		return tracked;
+	}
+
+	private handleExecFrame(frame: FrameOf<"exec_output"> | FrameOf<"exec_exit">): void {
+		const tracked = this.executions.get(frame.execId);
+		if (!tracked) {
+			const pending = this.pendingExecFrames.get(frame.execId) ?? [];
+			pending.push(frame);
+			this.pendingExecFrames.set(frame.execId, pending);
+			return;
+		}
+		this.applyExecFrame(tracked, frame);
+	}
+
+	private applyExecFrame(tracked: TrackedExecution, frame: FrameOf<"exec_output"> | FrameOf<"exec_exit">): void {
+		if (frame.type === "exec_output") {
+			const chunk = Buffer.from(frame.base64, "base64");
+			const key = frame.stream;
+			const combined = Buffer.concat([tracked[key], chunk]);
+			if (combined.byteLength > 512 * 1024) {
+				tracked[key] = combined.subarray(combined.byteLength - 512 * 1024);
+				tracked.truncated = true;
+			} else {
+				tracked[key] = combined;
+			}
+			return;
+		}
+		tracked.state = "exited";
+		tracked.exitCode = frame.exitCode;
+		tracked.signal = frame.signal;
+		tracked.timedOut = frame.timedOut;
+		tracked.aborted = frame.aborted;
+		tracked.durationMs = frame.durationMs;
+		const waiters = this.execWaiters.get(frame.execId) ?? [];
+		this.execWaiters.delete(frame.execId);
+		for (const waiter of waiters) waiter();
+		this.options.onChange?.();
 	}
 
 	private mustGet(instanceId: string): TrackedInstance {

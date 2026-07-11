@@ -1,19 +1,46 @@
 {
   "name": "pi-fleet",
-  "version": "0.0.1",
-  "description": "Cross-device orchestration extension for pi: server-owned bundles, tailnet transport, pi as fleet orchestrator",
+  "version": "0.1.0",
+  "description": "Cross-device orchestration and direct remote execution for pi over Tailscale",
   "type": "module",
   "license": "MIT",
+  "author": "picassio",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "tailscale",
+    "orchestration",
+    "remote-execution",
+    "multi-agent"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/picassio/pi-fleet.git"
+  },
+  "homepage": "https://github.com/picassio/pi-fleet#readme",
+  "bugs": {
+    "url": "https://github.com/picassio/pi-fleet/issues"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
   },
   "engines": {
     "node": ">=20"
   },
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
+  "files": [
+    "src",
+    "scripts",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
   "bin": {
     "pi-fleet-agent": "./scripts/pi-fleet-agent.mjs"
   },

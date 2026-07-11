@@ -23,6 +23,14 @@ function flag(name, fallback) {
 	return index !== -1 && args[index + 1] !== undefined ? args[index + 1] : fallback;
 }
 
+function flags(name) {
+	const values = [];
+	for (let index = 0; index < args.length; index += 1) {
+		if (args[index] === `--${name}` && args[index + 1] !== undefined) values.push(args[index + 1]);
+	}
+	return values;
+}
+
 const pinnedServer = flag("server");
 const port = Number(flag("port", String(AGENT_DEFAULT_PORT)));
 
@@ -41,6 +49,13 @@ if (command === "serve") {
 		whois: (ip) => tailscale.whois(ip),
 		ipProvider: { current: () => tailscale.ip4() },
 		...(flag("max-workers") ? { maxWorkers: Number(flag("max-workers")) } : {}),
+		exec: {
+			enabled: flag("exec-policy", "off") === "full",
+			roots: flags("exec-root"),
+			...(flag("max-execs") ? { maxConcurrent: Number(flag("max-execs")) } : {}),
+			...(flag("exec-timeout") ? { defaultTimeoutSeconds: Number(flag("exec-timeout")) } : {}),
+			...(flag("exec-audit-file") ? { auditFile: flag("exec-audit-file") } : {}),
+		},
 		log: (line) => console.log(`[${new Date().toISOString()}] ${line}`),
 	});
 	console.log(`pi-fleet agent on ${running.host}:${running.port} (pinned: ${pinnedServer})`);
@@ -60,6 +75,11 @@ if (command === "serve") {
 		entryPath: resolve(here, "pi-fleet-agent.mjs"),
 		pinnedServer,
 		port,
+		execPolicy: flag("exec-policy", "off") === "full" ? "full" : "off",
+		execRoots: flags("exec-root"),
+		...(flag("max-execs") ? { maxExecs: Number(flag("max-execs")) } : {}),
+		...(flag("exec-timeout") ? { execTimeoutSeconds: Number(flag("exec-timeout")) } : {}),
+		privileged: args.includes("--privileged"),
 	};
 	if (process.platform === "linux") {
 		const unit = generateSystemdUnit(spec);
@@ -76,6 +96,6 @@ if (command === "serve") {
 		console.log(generateSchtasksCommand(spec));
 	}
 } else {
-	console.error("usage: pi-fleet-agent <serve|install-service> --server <machine> [--port N]");
+	console.error("usage: pi-fleet-agent <serve|install-service> --server <machine> [--port N] [--exec-policy full] [--exec-root PATH] [--max-execs N] [--exec-timeout SEC] [--privileged]");
 	process.exit(1);
 }

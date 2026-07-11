@@ -77,6 +77,7 @@ const frameSchemas = {
 		packageVersion: Type.String(),
 		platform: Type.String(),
 		availableModels: Type.Optional(Type.Array(ModelRef)),
+		capabilities: Type.Optional(Type.Array(Type.String())),
 	}),
 	heartbeat: Type.Object({ ...base, type: Type.Literal("heartbeat") }),
 	error: Type.Object({
@@ -254,6 +255,60 @@ const frameSchemas = {
 				snippet: Type.String(),
 			}),
 		),
+	}),
+
+	// Direct machine execution (answered by the agent; opt-in, no worker)
+	exec_start: Type.Object({
+		...base,
+		type: Type.Literal("exec_start"),
+		mode: Type.Union([Type.Literal("shell"), Type.Literal("argv")]),
+		cwd: Type.String(),
+		command: Type.Optional(Type.String()),
+		executable: Type.Optional(Type.String()),
+		args: Type.Optional(Type.Array(Type.String())),
+		timeoutSeconds: Type.Optional(Type.Number()),
+	}),
+	exec_started: Type.Object({
+		...base,
+		type: Type.Literal("exec_started"),
+		execId: Type.String(),
+		startedAt: Type.Number(),
+	}),
+	exec_output: Type.Object({
+		...base,
+		type: Type.Literal("exec_output"),
+		execId: Type.String(),
+		seq: Type.Number(),
+		stream: Type.Union([Type.Literal("stdout"), Type.Literal("stderr")]),
+		base64: Type.String(),
+	}),
+	exec_exit: Type.Object({
+		...base,
+		type: Type.Literal("exec_exit"),
+		execId: Type.String(),
+		exitCode: Type.Union([Type.Number(), Type.Null()]),
+		signal: Type.Union([Type.String(), Type.Null()]),
+		timedOut: Type.Boolean(),
+		aborted: Type.Boolean(),
+		durationMs: Type.Number(),
+	}),
+	exec_abort: Type.Object({ ...base, type: Type.Literal("exec_abort"), execId: Type.String() }),
+	exec_aborted: Type.Object({ ...base, type: Type.Literal("exec_aborted"), execId: Type.String() }),
+	exec_list: Type.Object({ ...base, type: Type.Literal("exec_list") }),
+	exec_instances: Type.Object({
+		...base,
+		type: Type.Literal("exec_instances"),
+		executions: Type.Array(Type.Object({
+			execId: Type.String(),
+			mode: Type.Union([Type.Literal("shell"), Type.Literal("argv")]),
+			cwd: Type.String(),
+			state: Type.Union([Type.Literal("running"), Type.Literal("exited")]),
+			startedAt: Type.Number(),
+			finishedAt: Type.Optional(Type.Number()),
+			exitCode: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+			timedOut: Type.Optional(Type.Boolean()),
+			aborted: Type.Optional(Type.Boolean()),
+		})),
 	}),
 
 	// Read-only file service (answered by the agent)

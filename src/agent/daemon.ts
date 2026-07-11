@@ -17,6 +17,7 @@ import { InstanceSupervisor, type SupervisorOptions } from "./instances.ts";
 import { fsDiff, fsGrep, fsList, fsRead } from "./fsservice.ts";
 import { TaskOutbox } from "./outbox.ts";
 import { listSessions, searchSessions } from "./sessions.ts";
+import { ExecSupervisor, type ExecSupervisorOptions } from "./exec.ts";
 
 export const AGENT_DEFAULT_PORT = 9788;
 export const PACKAGE_VERSION = "0.0.1";
@@ -39,6 +40,8 @@ export interface AgentDaemonOptions {
 	instancesFile?: string;
 	/** When set, poll for the tailnet IP and rebind the listener on change (gap fix #3). */
 	ipProvider?: { current: () => Promise<string>; intervalMs?: number };
+	/** Direct machine execution; disabled unless enabled is explicitly true. */
+	exec?: ExecSupervisorOptions;
 	/** Internal: wired by startAgentDaemon to register per-instance budgets. */
 	registerBudget?: (instanceId: string, maxCost: number) => void;
 	heartbeatIntervalMs?: number;
@@ -51,12 +54,39 @@ export interface RunningAgent {
 	host: string;
 	port: number;
 	supervisor: InstanceSupervisor;
+	execSupervisor: ExecSupervisor;
 	close(): Promise<void>;
 }
 
 export async function startAgentDaemon(options: AgentDaemonOptions): Promise<RunningAgent> {
 	const log = options.log ?? (() => {});
 	const connections = new Set<FrameConnection>();
+	const ownerConnections = new Map<string, FrameConnection>();
+	const execSupervisor = new ExecSupervisor({
+		...options.exec,
+		onOutput: (execId, owner, seq, stream, data) => {
+			ownerConnections.get(owner)?.trySend({
+				v: 1,
+				type: "exec_output",
+				execId,
+				seq,
+				stream,
+				base64: data.toString("base64"),
+			});
+		},
+		onExit: (record) => {
+			ownerConnections.get(record.owner)?.trySend({
+				v: 1,
+				type: "exec_exit",
+				execId: record.execId,
+				exitCode: record.exitCode ?? null,
+				signal: record.signal ?? null,
+				timedOut: record.timedOut ?? false,
+				aborted: record.aborted ?? false,
+				durationMs: record.durationMs ?? 0,
+			});
+		},
+	});
 	const outbox = new TaskOutbox(
 		options.outboxDir ?? join(homedir(), ".pi", "agent", "fleet-agent", "outbox"),
 	);
@@ -209,7 +239,7 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 		supervisor.writeRpc(id, { type: "get_state", id: `probe-${id}` });
 	} };
 	const server = createServer((socket) => {
-		void handleConnection(socket, options, supervisor, connections, log, outbox, pendingTasks, agentState).catch((error) => {
+		void handleConnection(socket, options, supervisor, execSupervisor, connections, ownerConnections, log, outbox, pendingTasks, agentState).catch((error) => {
 			log(`connection error: ${error instanceof Error ? error.message : String(error)}`);
 			socket.destroy();
 		});
@@ -239,7 +269,7 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 					log(`tailnet IP changed ${currentHost} -> ${nextHost}; rebinding (workers unaffected)`);
 					await new Promise<void>((resolvePromise) => activeServer.close(() => resolvePromise()));
 					const next = createServer((socket) => {
-						void handleConnection(socket, options, supervisor, connections, log, outbox, pendingTasks, agentState).catch(() => socket.destroy());
+						void handleConnection(socket, options, supervisor, execSupervisor, connections, ownerConnections, log, outbox, pendingTasks, agentState).catch(() => socket.destroy());
 					});
 					await new Promise<void>((resolvePromise, rejectPromise) => {
 						next.once("error", rejectPromise);
@@ -260,9 +290,11 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 		host: options.host,
 		port,
 		supervisor,
+		execSupervisor,
 		close: async () => {
 			if (rebindTimer) clearInterval(rebindTimer);
 			for (const connection of connections) connection.close();
+			await execSupervisor.stopAll();
 			await supervisor.stopAll();
 			await new Promise<void>((resolvePromise) => activeServer.close(() => resolvePromise()));
 		},
@@ -281,7 +313,9 @@ async function handleConnection(
 	socket: Socket,
 	options: AgentDaemonOptions,
 	supervisor: InstanceSupervisor,
+	execSupervisor: ExecSupervisor,
 	connections: Set<FrameConnection>,
+	ownerConnections: Map<string, FrameConnection>,
 	log: (line: string) => void,
 	outbox: TaskOutbox,
 	pendingTasks: Map<string, string>,
@@ -314,7 +348,13 @@ async function handleConnection(
 			: {}),
 	});
 	connections.add(connection);
-	connection.onClose(() => connections.delete(connection));
+	const owner = `${identity.machine}:${identity.user}:${socket.remotePort ?? 0}`;
+	ownerConnections.set(owner, connection);
+	connection.onClose(() => {
+		connections.delete(connection);
+		ownerConnections.delete(owner);
+		void execSupervisor.abortOwner(owner);
+	});
 
 	connection.send({
 		v: 1,
@@ -323,6 +363,7 @@ async function handleConnection(
 		role: "agent",
 		packageVersion: PACKAGE_VERSION,
 		platform: process.platform,
+		...(execSupervisor.enabled ? { capabilities: ["exec-v1"] } : {}),
 	});
 
 	// Replay unacked task_done entries to the newly connected server (AC-3.5/3.6).
@@ -350,7 +391,7 @@ async function handleConnection(
 				state.persist();
 			}
 		}
-		void dispatch(frame, connection, supervisor, options, state).catch((error) => {
+		void dispatch(frame, connection, supervisor, execSupervisor, owner, options, state).catch((error) => {
 			connection.trySend({
 				v: 1,
 				type: "error",
@@ -365,6 +406,8 @@ async function dispatch(
 	frame: Frame,
 	connection: FrameConnection,
 	supervisor: InstanceSupervisor,
+	execSupervisor: ExecSupervisor,
+	execOwner: string,
 	agentOptions: AgentDaemonOptions,
 	state: AgentSharedState,
 ): Promise<void> {
@@ -483,6 +526,61 @@ async function dispatch(
 					...(request.id ? { id: request.id } : {}),
 				});
 			}
+			return;
+		}
+		case "exec_start": {
+			try {
+				const record = await execSupervisor.start({
+					mode: frame.mode,
+					cwd: frame.cwd,
+					...(frame.command !== undefined ? { command: frame.command } : {}),
+					...(frame.executable !== undefined ? { executable: frame.executable } : {}),
+					...(frame.args !== undefined ? { args: frame.args } : {}),
+					...(frame.timeoutSeconds !== undefined ? { timeoutSeconds: frame.timeoutSeconds } : {}),
+				}, execOwner);
+				connection.send({
+					v: 1,
+					type: "exec_started",
+					execId: record.execId,
+					startedAt: record.startedAt,
+					...(frame.id ? { id: frame.id } : {}),
+				});
+			} catch (error) {
+				connection.send({
+					v: 1,
+					type: "error",
+					code: execSupervisor.enabled ? "exec_failed" : "exec_disabled",
+					message: error instanceof Error ? error.message : String(error),
+					...(frame.id ? { id: frame.id } : {}),
+				});
+			}
+			return;
+		}
+		case "exec_abort": {
+			if (!(await execSupervisor.abort(frame.execId))) {
+				connection.send({ v: 1, type: "error", code: "unknown_exec", message: `no running execution ${frame.execId}`, ...(frame.id ? { id: frame.id } : {}) });
+				return;
+			}
+			connection.send({ v: 1, type: "exec_aborted", execId: frame.execId, ...(frame.id ? { id: frame.id } : {}) });
+			return;
+		}
+		case "exec_list": {
+			connection.send({
+				v: 1,
+				type: "exec_instances",
+				executions: execSupervisor.list().map((record) => ({
+					execId: record.execId,
+					mode: record.mode,
+					cwd: record.cwd,
+					state: record.state,
+					startedAt: record.startedAt,
+					...(record.finishedAt !== undefined ? { finishedAt: record.finishedAt } : {}),
+					...(record.exitCode !== undefined ? { exitCode: record.exitCode } : {}),
+					...(record.timedOut !== undefined ? { timedOut: record.timedOut } : {}),
+					...(record.aborted !== undefined ? { aborted: record.aborted } : {}),
+				})),
+				...(frame.id ? { id: frame.id } : {}),
+			});
 			return;
 		}
 		case "session_search": {
