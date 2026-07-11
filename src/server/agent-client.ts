@@ -24,6 +24,7 @@ export class AgentClient {
 	lastSessionsReport: FrameOf<"sessions_report"> | undefined;
 	private helloFrame: FrameOf<"hello"> | undefined;
 	private helloWaiters: Array<(hello: FrameOf<"hello">) => void> = [];
+	private closedHandlers: Array<() => void> = [];
 
 	private constructor(connection: FrameConnection) {
 		this.connection = connection;
@@ -33,6 +34,7 @@ export class AgentClient {
 				reject(new Error("agent connection closed"));
 			}
 			this.pending.clear();
+			for (const handler of this.closedHandlers) handler();
 		});
 	}
 
@@ -67,6 +69,11 @@ export class AgentClient {
 				resolvePromise(hello);
 			});
 		});
+	}
+
+	onClosed(handler: () => void): void {
+		this.closedHandlers.push(handler);
+		if (this.isClosed) handler();
 	}
 
 	onEvent(handler: AgentEventHandler): void {

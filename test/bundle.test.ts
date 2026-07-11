@@ -139,10 +139,8 @@ describe("AC-0.2 sync correctness", () => {
 		const source = await makeBundleDir({ "a.txt": "alpha", "b.txt": "beta" });
 		const manifest = await buildManifest(source, meta);
 		const cacheRoot = await mkdtemp(join(tmpdir(), "pf-cache-"));
-		let calls = 0;
 		const failingFetcher: BundleFileFetcher = async (path) => {
-			calls += 1;
-			if (calls === 2) throw new Error("network died");
+			if (path === "b.txt") throw new Error("network died"); // persistent, defeats retries
 			return readFile(toNativePath(source, path));
 		};
 
@@ -207,5 +205,24 @@ describe("manifest schema validation", () => {
 		const bad = validateManifest({ v: 1, name: "x", bundleHash: "0".repeat(64), files: [{ path: "a", sha256: "short", bytes: 1 }] });
 		expect(bad.ok).toBe(false);
 		expect(bad.schemaError).toBeTruthy();
+	});
+});
+
+describe("perf audit: transient fetch retry", () => {
+	it("recovers from a transient failure without failing the sync", async () => {
+		const source = await makeBundleDir({ "a.txt": "alpha" });
+		const manifest = await buildManifest(source, meta);
+		const cacheRoot = await mkdtemp(join(tmpdir(), "pf-cache-"));
+		let failures = 1;
+		const flakyFetcher: BundleFileFetcher = async (path) => {
+			if (failures > 0) {
+				failures -= 1;
+				throw new Error("transient blip");
+			}
+			return readFile(toNativePath(source, path));
+		};
+		const result = await syncBundle({ manifest, fetchFile: flakyFetcher, cacheRoot });
+		expect(result.status).toBe("synced");
+		expect(result.fetched).toEqual(["a.txt"]);
 	});
 });

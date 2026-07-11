@@ -208,31 +208,52 @@ export async function syncBundle(options: {
 			for (const file of base.manifest.files) baseHashes.set(file.path, file.sha256);
 		}
 
-		for (const file of manifest.files) {
+		// Parallel fetch (concurrency 8) with bounded retries on transient errors.
+		const queue = [...manifest.files];
+		const processOne = async (file: BundleFile): Promise<void> => {
 			const destination = toNativePath(temp, file.path);
 			await mkdir(join(destination, ".."), { recursive: true });
 
 			if (base && baseHashes.get(file.path) === file.sha256) {
 				await copyFile(toNativePath(base.dir, file.path), destination);
 				reused.push(file.path);
-				continue;
+				return;
 			}
 
-			let content: Buffer;
-			try {
-				content = await fetchFile(file.path, file.sha256);
-			} catch (error) {
+			let content: Buffer | undefined;
+			let lastError: unknown;
+			for (let attempt = 0; attempt < 3; attempt += 1) {
+				if (attempt > 0) await new Promise((resolvePromise) => setTimeout(resolvePromise, 250 * attempt));
+				try {
+					const candidate = await fetchFile(file.path, file.sha256);
+					if (sha256Hex(candidate) !== file.sha256) {
+						lastError = new BundleSyncError("hash_mismatch", `hash mismatch for ${file.path}`);
+						continue; // possibly transient truncation; retry
+					}
+					content = candidate;
+					break;
+				} catch (error) {
+					lastError = error;
+				}
+			}
+			if (content === undefined) {
+				if (lastError instanceof BundleSyncError) throw lastError;
 				throw new BundleSyncError(
 					"fetch_failed",
-					`failed to fetch ${file.path}: ${error instanceof Error ? error.message : String(error)}`,
+					`failed to fetch ${file.path}: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
 				);
-			}
-			if (sha256Hex(content) !== file.sha256) {
-				throw new BundleSyncError("hash_mismatch", `hash mismatch for ${file.path}`);
 			}
 			await writeFile(destination, content);
 			fetched.push(file.path);
-		}
+		};
+		const workers = Array.from({ length: Math.min(8, queue.length) }, async () => {
+			for (;;) {
+				const file = queue.shift();
+				if (!file) return;
+				await processOne(file);
+			}
+		});
+		await Promise.all(workers);
 
 		try {
 			await rename(temp, target);

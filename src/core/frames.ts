@@ -403,22 +403,27 @@ export function encodeFrame(frame: Frame): Buffer {
  * line (oversized data is skipped until the next `\n`).
  */
 export class FrameDecoder {
-	private buffer: Buffer = Buffer.alloc(0);
+	/** Pending partial-line chunks; joined only when a newline completes a record (O(n)). */
+	private parts: Buffer[] = [];
+	private partsBytes = 0;
 	private skippingOversized = false;
 
 	feed(chunk: Buffer | string): ParseResult[] {
-		this.buffer = Buffer.concat([
-			this.buffer,
-			typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk,
-		]);
+		const data = typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk;
 		const results: ParseResult[] = [];
+		let start = 0;
 
 		for (;;) {
-			const newline = this.buffer.indexOf(0x0a);
+			const newline = data.indexOf(0x0a, start);
 			if (newline === -1) {
-				if (this.buffer.byteLength > MAX_FRAME_BYTES) {
-					if (!this.skippingOversized) {
+				const rest = data.subarray(start);
+				if (rest.byteLength > 0 && !this.skippingOversized) {
+					this.parts.push(rest);
+					this.partsBytes += rest.byteLength;
+					if (this.partsBytes > MAX_FRAME_BYTES) {
 						this.skippingOversized = true;
+						this.parts = [];
+						this.partsBytes = 0;
 						results.push({
 							ok: false,
 							error: {
@@ -427,19 +432,24 @@ export class FrameDecoder {
 							},
 						});
 					}
-					this.buffer = Buffer.alloc(0);
 				}
 				return results;
 			}
 
-			const line = this.buffer.subarray(0, newline);
-			this.buffer = this.buffer.subarray(newline + 1);
+			const tail = data.subarray(start, newline);
+			start = newline + 1;
 
 			if (this.skippingOversized) {
-				// Remainder of the oversized record; drop it silently.
+				// Remainder of the oversized record ends here; drop it silently.
 				this.skippingOversized = false;
 				continue;
 			}
+
+			const line =
+				this.parts.length === 0 ? tail : Buffer.concat([...this.parts, tail], this.partsBytes + tail.byteLength);
+			this.parts = [];
+			this.partsBytes = 0;
+
 			if (line.byteLength > MAX_FRAME_BYTES) {
 				results.push({
 					ok: false,
@@ -469,3 +479,4 @@ export class FrameDecoder {
 		}
 	}
 }
+

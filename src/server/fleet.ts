@@ -99,23 +99,12 @@ export class FleetManager {
 	}
 
 	private watchConnection(host: string, client: AgentClient, backoffMs: number): void {
-		const poll = setInterval(() => {
-			if (!client.isClosed) return;
-			clearInterval(poll);
+		// Event-driven (perf audit fix): no polling.
+		client.onClosed(() => {
 			if (this.closed) return;
 			this.options.onChange?.();
-			const timer = setTimeout(() => {
-				this.reconnectTimers.delete(host);
-				void this.agent(host)
-					.then(() => this.options.onChange?.())
-					.catch(() => {
-						if (!this.closed) this.watchClosed(host, Math.min(backoffMs * 2, 30_000));
-					});
-			}, backoffMs);
-			timer.unref?.();
-			this.reconnectTimers.set(host, timer);
-		}, 500);
-		poll.unref?.();
+			this.watchClosed(host, backoffMs);
+		});
 	}
 
 	private watchClosed(host: string, backoffMs: number): void {

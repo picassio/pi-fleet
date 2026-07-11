@@ -61,6 +61,8 @@ export interface SessionListing {
 	updatedAt: number;
 }
 
+const listingCache = new Map<string, { mtimeMs: number; listing: SessionListing }>();
+
 /** Best-effort session inventory: JSONL headers parsed, never pi imports. */
 export async function listSessions(root: string | undefined): Promise<SessionListing[]> {
 	const base = root ?? join(homedir(), ".pi", "agent", "sessions");
@@ -80,6 +82,11 @@ export async function listSessions(root: string | undefined): Promise<SessionLis
 			} else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
 				try {
 					const info = await stat(full);
+					const cached = listingCache.get(full);
+					if (cached && cached.mtimeMs === info.mtimeMs) {
+						sessions.push(cached.listing);
+						continue;
+					}
 					const handle = await open(full, "r");
 					let head: string;
 					try {
@@ -91,7 +98,7 @@ export async function listSessions(root: string | undefined): Promise<SessionLis
 					const firstLine = head.split("\n", 1)[0] ?? "";
 					const header = JSON.parse(firstLine) as { cwd?: string; name?: string };
 					const name = typeof header.name === "string" ? header.name : undefined;
-					sessions.push({
+					const listing: SessionListing = {
 						sessionId: basename(entry.name, ".jsonl"),
 						path: full,
 						...(name ? { name } : {}),
@@ -99,7 +106,9 @@ export async function listSessions(root: string | undefined): Promise<SessionLis
 						kind: name?.startsWith("baseline:") ? "baseline" : name?.startsWith("task:") ? "task" : "scratch",
 						pinned: name?.startsWith("baseline:") ?? false,
 						updatedAt: info.mtimeMs,
-					});
+					};
+					listingCache.set(full, { mtimeMs: info.mtimeMs, listing });
+					sessions.push(listing);
 				} catch {
 					// unparseable session: skip
 				}
