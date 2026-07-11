@@ -64,7 +64,9 @@ Caps are the design: 50KB text pages / 700KB binary (frame-safe). If a real need
 
 Shipped same-day: worker stderr tail capture (4KB ring; surfaces in exit logs and crash task_done summaries — invisible worker crashes cost a debugging session on 2026-07-11) and AgentClient request timeouts (60s; a hung-not-closed agent previously hung spawn/list/stop forever).
 
-Remaining, by value:
+All items below SHIPPED 2026-07-11 (127 tests, CI green): parallel fetch w/ retries, O(n) decoder, event-driven reconnect, mtime cache.
+
+Formerly remaining, by value:
 1. **Parallel bundle fetch** — syncBundle fetches files sequentially; concurrency 8 would cut cold-provision latency roughly linearly with file count. (~30 lines in bundle.ts)
 2. **Registry fetch retries** — one transient blip fails provisioning; 2 retries with backoff on fetchFile.
 3. **FrameDecoder Buffer.concat is O(n²)** on heavily fragmented streams — keep a chunk list, join per line. Only matters at high event throughput.
