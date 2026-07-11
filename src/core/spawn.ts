@@ -7,6 +7,8 @@
  * strings. See docs/plan.md (Cross-platform commitments).
  */
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { delimiter, dirname, join } from "node:path";
 
 export interface ResolvedCommand {
 	command: string;
@@ -35,6 +37,14 @@ export async function resolvePiCommand(options: {
 } = {}): Promise<ResolvedCommand> {
 	const platform = options.platform ?? process.platform;
 	if (platform !== "win32") {
+		// PATH first; services (systemd/launchd) often lack the user shell PATH,
+		// so fall back to node's own bin dir where npm -g installs pi.
+		const pathDirs = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
+		for (const dir of pathDirs) {
+			if (existsSync(join(dir, "pi"))) return { command: join(dir, "pi"), prefixArgs: [] };
+		}
+		const sibling = join(dirname(process.execPath), "pi");
+		if (existsSync(sibling)) return { command: sibling, prefixArgs: [] };
 		return { command: "pi", prefixArgs: [] };
 	}
 

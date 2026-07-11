@@ -21,6 +21,7 @@ Description=pi-fleet agent (pinned server: ${spec.pinnedServer})
 After=network-online.target tailscaled.service
 
 [Service]
+Environment=PATH=${spec.nodePath.substring(0, spec.nodePath.lastIndexOf("/"))}:/usr/local/bin:/usr/bin:/bin
 ExecStart=${spec.nodePath} ${spec.entryPath} serve --server ${spec.pinnedServer} --port ${spec.port}
 Restart=on-failure
 RestartSec=5

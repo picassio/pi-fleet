@@ -43,6 +43,7 @@ Description=pi-fleet agent (pinned server: $SERVER)
 After=network-online.target
 
 [Service]
+Environment=PATH=$(dirname "$(command -v node)"):/usr/local/bin:/usr/bin:/bin
 ExecStart=$(command -v node) $PKG/scripts/pi-fleet-agent.mjs $AGENT_ARGS
 Restart=on-failure
 RestartSec=5
