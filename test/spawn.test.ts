@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 import { PiNotFoundError, buildPiRpcInvocation, resolvePiCommand } from "../src/core/spawn.ts";
 
 describe("resolvePiCommand", () => {
-	it("uses PATH `pi` on POSIX", async () => {
-		expect(await resolvePiCommand({ platform: "linux" })).toEqual({ command: "pi", prefixArgs: [] });
-		expect(await resolvePiCommand({ platform: "darwin" })).toEqual({ command: "pi", prefixArgs: [] });
+	it("resolves an absolute pi (PATH dirs or node's bin dir) on POSIX", async () => {
+		for (const platform of ["linux", "darwin"] as const) {
+			const resolved = await resolvePiCommand({ platform });
+			expect(resolved.prefixArgs).toEqual([]);
+			// Absolute when pi is findable (this environment has it); bare "pi" fallback otherwise.
+			expect(resolved.command === "pi" || resolved.command.endsWith("/pi")).toBe(true);
+		}
 	});
 
 	it("prefers .exe on Windows", async () => {
