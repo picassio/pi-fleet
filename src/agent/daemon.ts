@@ -161,7 +161,11 @@ export async function startAgentDaemon(options: AgentDaemonOptions): Promise<Run
 		},
 		onExit: (instanceId, code) => {
 			options.supervisor?.onExit?.(instanceId, code);
-			log(`instance ${instanceId} exited (${code})`);
+			const stderrTail = supervisor.stderrTail(instanceId).trim();
+			log(`instance ${instanceId} exited (${code})${stderrTail ? `; stderr tail: ${stderrTail.slice(-500)}` : ""}`);
+			if (stderrTail && !lastAssistant.get(instanceId)) {
+				lastAssistant.set(instanceId, `(worker exited ${code}) stderr: ${stderrTail.slice(-1500)}`);
+			}
 			persisted.delete(instanceId);
 			persist();
 			// Crash mid-task: never leave the orchestrator waiting (gap fix).

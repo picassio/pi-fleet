@@ -59,3 +59,15 @@ Caps are the design: 50KB text pages / 700KB binary (frame-safe). If a real need
 ## Suggested order
 
 1 (orphans) → 2 (ownership) in one session; 3 + 4 in a platform-polish session; 5 whenever credentials allow; 6 on demand.
+
+## Performance & robustness backlog (audit 2026-07-11)
+
+Shipped same-day: worker stderr tail capture (4KB ring; surfaces in exit logs and crash task_done summaries — invisible worker crashes cost a debugging session on 2026-07-11) and AgentClient request timeouts (60s; a hung-not-closed agent previously hung spawn/list/stop forever).
+
+Remaining, by value:
+1. **Parallel bundle fetch** — syncBundle fetches files sequentially; concurrency 8 would cut cold-provision latency roughly linearly with file count. (~30 lines in bundle.ts)
+2. **Registry fetch retries** — one transient blip fails provisioning; 2 retries with backoff on fetchFile.
+3. **FrameDecoder Buffer.concat is O(n²)** on heavily fragmented streams — keep a chunk list, join per line. Only matters at high event throughput.
+4. **Connection-close detection polls (500ms)** in FleetManager.watchConnection — wire an onClose callback instead.
+5. **listSessions walks the full store per connect** — mtime-based incremental cache if stores grow large (already bounded to 200 results).
+6. **Event ring buffer splice** — fine at 300; switch to index ring only if buffers grow.

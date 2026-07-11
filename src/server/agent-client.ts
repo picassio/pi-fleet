@@ -160,11 +160,26 @@ export class AgentClient {
 		return this.connection.isClosed;
 	}
 
-	private async request(frame: Frame & { id?: string }): Promise<Frame> {
+	private async request(frame: Frame & { id?: string }, timeoutMs = 60_000): Promise<Frame> {
 		const id = `r-${randomBytes(6).toString("hex")}`;
 		const withId = { ...frame, id } as Frame;
 		return new Promise((resolvePromise, rejectPromise) => {
-			this.pending.set(id, { resolve: resolvePromise, reject: rejectPromise });
+			// A hung (but not closed) agent must never hang the orchestrator.
+			const timer = setTimeout(() => {
+				this.pending.delete(id);
+				rejectPromise(new Error(`agent request ${frame.type} timed out after ${timeoutMs}ms`));
+			}, timeoutMs);
+			timer.unref?.();
+			this.pending.set(id, {
+				resolve: (value) => {
+					clearTimeout(timer);
+					resolvePromise(value);
+				},
+				reject: (error) => {
+					clearTimeout(timer);
+					rejectPromise(error);
+				},
+			});
 			try {
 				this.connection.send(withId);
 			} catch (error) {

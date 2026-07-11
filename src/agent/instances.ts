@@ -50,6 +50,7 @@ interface Managed {
 	record: InstanceRecord;
 	child: ChildProcessWithoutNullStreams;
 	stdoutBuffer: string;
+	stderrTail: string;
 }
 
 export class InstanceSupervisor {
@@ -93,7 +94,7 @@ export class InstanceSupervisor {
 			state: "running",
 			...(request.traceId ? { traceId: request.traceId } : {}),
 		};
-		const managed: Managed = { record, child, stdoutBuffer: "" };
+		const managed: Managed = { record, child, stdoutBuffer: "", stderrTail: "" };
 		this.instances.set(instanceId, managed);
 
 		child.stdout.setEncoding("utf8");
@@ -112,6 +113,11 @@ export class InstanceSupervisor {
 					// Non-JSON worker output is dropped (worker logs go to stderr).
 				}
 			}
+		});
+		child.stderr.setEncoding("utf8");
+		child.stderr.on("data", (chunk: string) => {
+			// Keep the last 4KB so crashes are diagnosable (perf audit fix).
+			managed.stderrTail = (managed.stderrTail + chunk).slice(-4096);
 		});
 		child.on("exit", (code) => {
 			record.state = record.state === "stopped" ? "stopped" : "exited";
@@ -172,6 +178,10 @@ export class InstanceSupervisor {
 	get(instanceId: string): InstanceRecord | undefined {
 		const managed = this.instances.get(instanceId);
 		return managed ? { ...managed.record } : undefined;
+	}
+
+	stderrTail(instanceId: string): string {
+		return this.instances.get(instanceId)?.stderrTail ?? "";
 	}
 
 	async stopAll(): Promise<void> {
