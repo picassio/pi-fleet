@@ -12,6 +12,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { hostname } from "node:os";
 import { FleetManager } from "./server/fleet.ts";
+import { createBridge, type BridgeManagerLike } from "./server/bridge.ts";
 import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -165,6 +166,12 @@ function registerServerMode(pi: ExtensionAPI): void {
 		};
 	};
 	let fleet: FleetManager | undefined;
+	// Programmatic bridge for sibling extensions (pi-squad etc.). Published on
+	// globalThis at startup; getFleet() stays lazy so publishing has no side
+	// effects until a consumer actually spawns something. pi-fleet is fully
+	// functional when nothing ever consumes it (independence contract).
+	const bridgeHandle = createBridge(() => getFleet() as unknown as BridgeManagerLike);
+	bridgeHandle.publish();
 	let followId: string | undefined;
 	const followLines: string[] = [];
 	let lastUi: { setWidget(key: string, lines?: string[]): void; setStatus(key: string, text?: string): void } | undefined;
@@ -194,6 +201,9 @@ function registerServerMode(pi: ExtensionAPI): void {
 		fleet ??= new FleetManager({
 			onChange: renderFleet,
 			onInstanceEvent: (instanceId, event) => {
+				// Cross-extension bridge subscribers first (pi-squad etc.); their
+				// errors are isolated inside dispatchEvent.
+				bridgeHandle.dispatchEvent(instanceId, event);
 				if (instanceId !== followId || !lastUi) return;
 				const typed = event as { type?: string; message?: { role?: string; content?: Array<{ type?: string; text?: string }> }; toolName?: string };
 				let line: string | undefined;
@@ -368,6 +378,7 @@ function registerServerMode(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", async () => {
+		bridgeHandle.unpublish();
 		await agentRunning?.close();
 		agentRunning = undefined;
 	});
